@@ -21,7 +21,7 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 
 ## Installation
 
-### Quick install (recommended)
+### Bare metal / systemd
 
 ```bash
 git clone https://github.com/Anquietas86/openwebrx-horus.git
@@ -37,18 +37,45 @@ The installer will:
 - Patch the 5 OpenWebRX files needed to register the decoder
 - Back up every file it modifies (`.pre-horus` suffix)
 
-The script is idempotent — safe to run more than once.
+The script is idempotent — safe to run more than once. Replace `/opt/openwebrx` with your actual OpenWebRX path if different.
 
-Replace `/opt/openwebrx` with your actual OpenWebRX path if different.
-
-### Uninstall
+To uninstall:
 
 ```bash
 sudo ./install.sh --uninstall /opt/openwebrx
 sudo systemctl restart openwebrx
 ```
 
-This removes all plugin files and cleanly strips the patched blocks from OpenWebRX's source files.
+### Docker
+
+```bash
+git clone https://github.com/Anquietas86/openwebrx-horus.git
+cd openwebrx-horus
+chmod +x install-docker.sh
+sudo ./install-docker.sh openwebrx /opt/openwebrx/plugins
+docker restart openwebrx
+```
+
+Replace `openwebrx` with your container name and `/opt/openwebrx/plugins` with your host plugins volume path.
+
+The Docker installer handles two layers:
+
+| What | Where | Persists across rebuild? |
+|------|-------|--------------------------|
+| Frontend plugin (JS/CSS) | Host plugins volume | Yes |
+| Plugin init.js registration | Host plugins volume | Yes |
+| Python modules | Inside container | No — re-run installer |
+| Python source patches | Inside container | No — re-run installer |
+| horusdemodlib pip package | Inside container | No — re-run installer |
+
+After a container rebuild or image update, re-run `install-docker.sh` to restore the Python side. The frontend plugin will still be there.
+
+To uninstall:
+
+```bash
+sudo ./install-docker.sh --uninstall openwebrx /opt/openwebrx/plugins
+docker restart openwebrx
+```
 
 ### Manual install
 
@@ -56,8 +83,10 @@ If you prefer to patch by hand, see the `patches/` directory for the exact chang
 - `owrx/feature.py` — add horusdemodlib feature detection
 - `owrx/modes.py` — add Horus mode definitions
 - `owrx/service/__init__.py` — wire up the demodulator chain and parser
-- `htdocs/index.html` — add panel div, CSS, and JS includes
-- `htdocs/openwebrx.js` — register the panel in the message routing
+- `htdocs/index.html` — add panel div, CSS, and JS includes (bare metal only)
+- `htdocs/openwebrx.js` — register the panel in message routing (bare metal only)
+
+For Docker, the frontend is handled via the `plugin/horus/` directory — copy it to your plugins volume and add `Plugins.load('horus');` to `init.js`.
 
 ### Post-install setup
 

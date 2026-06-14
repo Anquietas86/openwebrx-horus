@@ -1,0 +1,126 @@
+/* Horus Balloon Telemetry Plugin */
+
+#openwebrx-panel-horus-message {
+    max-height: 300px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.horus-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    background: #2a2a2a;
+    border-bottom: 1px solid #444;
+}
+
+.horus-title {
+    font-weight: bold;
+    font-size: 12px;
+    color: #eee;
+}
+
+.horus-clear-btn {
+    background: none;
+    border: 1px solid #555;
+    color: #aaa;
+    cursor: pointer;
+    padding: 1px 6px;
+    font-size: 11px;
+    border-radius: 3px;
+}
+
+.horus-clear-btn:hover {
+    background: #444;
+    color: #fff;
+}
+
+.horus-table-wrap {
+    overflow-y: auto;
+    flex: 1;
+}
+
+#openwebrx-panel-horus-message table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: monospace;
+}
+
+#openwebrx-panel-horus-message thead th {
+    position: sticky;
+    top: 0;
+    background: #333;
+    color: #eee;
+    padding: 4px 6px;
+    text-align: left;
+    font-weight: bold;
+    border-bottom: 1px solid #555;
+}
+
+#openwebrx-panel-horus-message tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+#openwebrx-panel-horus-message tbody tr:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+#openwebrx-panel-horus-message td {
+    padding: 3px 6px;
+    white-space: nowrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+#openwebrx-panel-horus-message .time {
+    width: 65px;
+    color: #aaa;
+}
+
+#openwebrx-panel-horus-message .callsign {
+    width: 90px;
+    font-weight: bold;
+}
+
+#openwebrx-panel-horus-message .callsign a {
+    color: #4fc3f7;
+    text-decoration: none;
+}
+
+#openwebrx-panel-horus-message .callsign a:hover {
+    text-decoration: underline;
+}
+
+#openwebrx-panel-horus-message .sequence {
+    width: 45px;
+    text-align: right;
+    color: #aaa;
+}
+
+#openwebrx-panel-horus-message .position a {
+    color: #81c784;
+    text-decoration: none;
+}
+
+#openwebrx-panel-horus-message .position a:hover {
+    text-decoration: underline;
+}
+
+#openwebrx-panel-horus-message .altitude {
+    width: 80px;
+    text-align: right;
+    color: #ffb74d;
+    font-weight: bold;
+}
+
+#openwebrx-panel-horus-message .snr {
+    width: 65px;
+    text-align: right;
+}
+
+#openwebrx-panel-horus-message .sensors {
+    color: #bbb;
+    font-size: 11px;
+}
