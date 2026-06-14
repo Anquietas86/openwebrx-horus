@@ -1,0 +1,17 @@
+# Add to htdocs/index.html
+#
+# 1. Add CSS include in <head>, after other CSS includes:
+#
+#    <link rel="stylesheet" type="text/css" href="css/horus.css" />
+#
+# 2. Add JS include before </body>, after MessagePanel.js:
+#
+#    <script src="lib/HorusMessagePanel.js"></script>
+#
+# 3. Add the panel div inside openwebrx-panels-container-left,
+#    alongside the other message panels (wsjt, packet, pocsag, etc.):
+
+<div class="openwebrx-panel openwebrx-message-panel"
+     id="openwebrx-panel-horus-message"
+     style="display: none; width: 619px;"
+     data-panel-name="horus-message"></div>

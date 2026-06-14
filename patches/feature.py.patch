@@ -1,0 +1,21 @@
+# Add to owrx/feature.py
+#
+# In the FeatureDetector class, add a detection method for horusdemodlib.
+# This follows the same pattern as other Python package detectors.
+#
+# Add to the features dict in __init__:
+#
+#     "horusdemodlib": "has_horusdemodlib",
+#
+# Add this method to the FeatureDetector class:
+
+def has_horusdemodlib(self):
+    """Check if horusdemodlib is installed and the C modem is available."""
+    try:
+        from horusdemodlib.demod import HorusLib, Mode
+        # Verify the CFFI C extension loaded successfully
+        test = HorusLib(mode=Mode.BINARY, sample_rate=48000)
+        test.close()
+        return True
+    except Exception:
+        return False

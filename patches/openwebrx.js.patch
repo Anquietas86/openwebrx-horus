@@ -1,0 +1,23 @@
+# Add to htdocs/openwebrx.js
+#
+# 1. In secondary_demod_init(), add 'horus' to the panel initialization list.
+#    Find the forEach loop that initializes message panels:
+#
+#    ['wsjt', 'packet', 'pocsag', 'page', 'sstv', 'fax', 'ism', 'hfdl',
+#     'adsb', 'dsc', 'skimmer', 'meshtastic'].forEach(function(id){
+#        $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();
+#    })
+#
+#    Add 'horus' to this array:
+#
+#    ['wsjt', 'packet', 'pocsag', 'page', 'sstv', 'fax', 'ism', 'hfdl',
+#     'adsb', 'dsc', 'skimmer', 'meshtastic', 'horus'].forEach(function(id){
+#        $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();
+#    })
+#
+# 2. In the secondary_demod WebSocket message handler, add 'horus' to the
+#    panels array that routes messages. Find:
+#
+#    var panels = ['wsjt', 'packet', 'pocsag', ...].map(function(id) {
+#
+#    Add 'horus' to that array.
