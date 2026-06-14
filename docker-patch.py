@@ -150,24 +150,12 @@ def patch_modes(content):
 def patch_service(content):
     m = MARKER
 
-    # Insert imports at the TOP of the file — only match unindented import lines
-    import_block = (
-        "{m} BEGIN\n"
-        "from owrx.chain.horus import HorusDemodulatorChain\n"
-        "from owrx.horus import HorusParser\n"
-        "{m} END"
-    ).format(m=m)
+    # Use inline imports inside the elif branches — matches the existing
+    # pattern in this file (e.g. `from csdr.chain.satellite import ...`
+    # inside elif blocks) and avoids needing owrx.chain to be importable
+    # at module load time.
 
     lines = content.split("\n")
-    last_toplevel_import_idx = 0
-    for i, line in enumerate(lines):
-        # Only match lines with no leading whitespace (top-level imports)
-        if line and not line[0].isspace() and (
-            line.startswith("import ") or line.startswith("from ")
-        ):
-            last_toplevel_import_idx = i
-
-    lines.insert(last_toplevel_import_idx + 1, import_block)
 
     # Find the raise ValueError line and detect its indentation
     raise_idx = None
@@ -182,8 +170,10 @@ def patch_service(content):
         demod_lines = [
             indent + m + " BEGIN",
             indent + 'elif mod == "horus_binary":',
+            indent + "    from owrx.chain.horus import HorusDemodulatorChain",
             indent + "    return HorusDemodulatorChain(mode_str=\"horus_binary\")",
             indent + 'elif mod == "horus_rtty":',
+            indent + "    from owrx.chain.horus import HorusDemodulatorChain",
             indent + "    return HorusDemodulatorChain(mode_str=\"horus_rtty\")",
             indent + m + " END",
         ]

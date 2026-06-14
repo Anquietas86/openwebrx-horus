@@ -1,21 +1,16 @@
 # Add to owrx/service/__init__.py
 #
 # In the _getSecondaryDemodulator() method, add Horus to the mode mapping.
-# Place this alongside the existing sonde/packet entries:
+# Place this alongside the existing sonde/packet entries.
+#
+# Uses inline imports (matching the existing pattern in this file) to avoid
+# needing owrx.chain to be importable at module load time.
 
-# Add these imports at top:
-#
-#     from owrx.chain.horus import HorusDemodulatorChain
-#     from owrx.horus import HorusParser
-#
-# Add these conditions in _getSecondaryDemodulator():
+# Add these conditions in _getSecondaryDemodulator(), before the raise ValueError:
 
 elif modulation == "horus_binary":
+    from owrx.chain.horus import HorusDemodulatorChain
     return HorusDemodulatorChain(mode_str="horus_binary")
 elif modulation == "horus_rtty":
+    from owrx.chain.horus import HorusDemodulatorChain
     return HorusDemodulatorChain(mode_str="horus_rtty")
-
-# And in _getParser() (or equivalent), map to HorusParser:
-
-elif modulation in ("horus_binary", "horus_rtty"):
-    return HorusParser(service=True)

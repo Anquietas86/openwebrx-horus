@@ -258,7 +258,7 @@ else
     backup "$SERVICE_FILE"
 
     python3 - "$SERVICE_FILE" <<'PYEOF'
-import sys, re
+import sys
 
 path = sys.argv[1]
 marker = "# openwebrx-horus"
@@ -266,23 +266,8 @@ marker = "# openwebrx-horus"
 with open(path, 'r') as f:
     content = f.read()
 
-# 1. Add imports after the last existing import block
-import_block = '''{marker} BEGIN
-from owrx.chain.horus import HorusDemodulatorChain
-from owrx.horus import HorusParser
-{marker} END'''.format(marker=marker)
-
-# Find the last top-level (unindented) import line
-lines = content.split('\n')
-last_import_idx = 0
-for i, line in enumerate(lines):
-    if line and not line[0].isspace() and (line.startswith('import ') or line.startswith('from ')):
-        last_import_idx = i
-
-lines.insert(last_import_idx + 1, import_block)
-content = '\n'.join(lines)
-
-# 2. Add demodulator mapping — insert before the ValueError raise
+# Use inline imports inside elif branches — matches the existing pattern
+# in service/__init__.py and avoids top-level import of owrx.chain
 lines = content.split('\n')
 raise_idx = None
 indent = ""
@@ -296,8 +281,10 @@ if raise_idx is not None:
     demod_lines = [
         indent + marker + " BEGIN",
         indent + 'elif mod == "horus_binary":',
+        indent + '    from owrx.chain.horus import HorusDemodulatorChain',
         indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
         indent + 'elif mod == "horus_rtty":',
+        indent + '    from owrx.chain.horus import HorusDemodulatorChain',
         indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
         indent + marker + " END",
     ]
