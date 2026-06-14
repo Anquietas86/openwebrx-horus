@@ -5,39 +5,48 @@
 # so Python patches and horusdemodlib survive image updates automatically.
 #
 # Usage:
-#   1. Clone this repo alongside your docker-compose.yml:
+#   1. Clone this repo next to your docker-compose.yml:
 #        git clone https://github.com/Anquietas86/openwebrx-horus.git
 #
 #   2. Copy this file:
 #        cp openwebrx-horus/docker-compose.override.example.yml docker-compose.override.yml
 #
-#   3. Edit the paths below to match your setup, then:
+#   3. Edit the service name below to match your docker-compose.yml
+#      (e.g. "owrx", "openwebrx", etc.), then:
 #        docker-compose up -d
 #
 # docker-compose merges this with your existing docker-compose.yml automatically.
 
 services:
-  openwebrx:
+  # ⚠️  Change this to match your service name in docker-compose.yml
+  owrx:
     volumes:
       # Mount the plugin repo into the container (read-only)
       - ./openwebrx-horus:/opt/openwebrx-horus:ro
 
-      # Your existing volumes (adjust paths to match your setup):
-      # - /opt/openwebrx/etc:/etc/openwebrx
-      # - /opt/openwebrx/plugins:/usr/lib/python3/dist-packages/htdocs/plugins
-      # - /opt/openwebrx/var:/var/lib/openwebrx
-
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
+        echo "[openwebrx-horus] Starting installation..."
+
         # Install horusdemodlib if missing
-        python3 -c "import horusdemodlib" 2>/dev/null || pip3 install --quiet horusdemodlib
+        if ! python3 -c "import horusdemodlib" 2>/dev/null; then
+          echo "[openwebrx-horus] Installing horusdemodlib..."
+          python3 -m pip install --quiet --break-system-packages horusdemodlib 2>/dev/null \
+            || python3 -m pip install --quiet horusdemodlib 2>/dev/null \
+            || { apt-get update -qq && apt-get install -y -qq python3-pip >/dev/null 2>&1 \
+                 && pip3 install --quiet horusdemodlib; }
+          echo "[openwebrx-horus] horusdemodlib installed"
+        else
+          echo "[openwebrx-horus] horusdemodlib already installed"
+        fi
 
         # Copy Python modules
         cp /opt/openwebrx-horus/owrx/horus.py /usr/lib/python3/dist-packages/owrx/horus.py
         cp /opt/openwebrx-horus/owrx/chain/horus.py /usr/lib/python3/dist-packages/owrx/chain/horus.py
+        echo "[openwebrx-horus] Python modules copied"
 
-        # Copy frontend plugin to the plugins directory
+        # Copy frontend plugin (plugins dir is volume-mounted, so this persists)
         mkdir -p /usr/lib/python3/dist-packages/htdocs/plugins/horus
         cp /opt/openwebrx-horus/plugin/horus/horus.js /usr/lib/python3/dist-packages/htdocs/plugins/horus/
         cp /opt/openwebrx-horus/plugin/horus/horus.css /usr/lib/python3/dist-packages/htdocs/plugins/horus/
@@ -49,9 +58,12 @@ services:
         elif ! grep -q "'horus'" "$$INIT_JS"; then
           echo "Plugins.load('horus');" >> "$$INIT_JS"
         fi
+        echo "[openwebrx-horus] Frontend plugin ready"
 
-        # Apply Python patches (idempotent)
+        # Apply Python patches (idempotent — safe to run every start)
         python3 /opt/openwebrx-horus/docker-patch.py /usr/lib/python3/dist-packages
 
-        # Hand off to the real entrypoint
-        exec openwebrx
+        echo "[openwebrx-horus] Installation complete, starting OpenWebRX..."
+
+        # Hand off to the real entrypoint (s6 process supervisor)
+        exec /init
