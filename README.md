@@ -77,6 +77,27 @@ sudo ./install-docker.sh --uninstall openwebrx /opt/openwebrx/plugins
 docker restart openwebrx
 ```
 
+### Docker Compose
+
+If you run OpenWebRX via docker-compose, you can have the plugin auto-install on every container start — no need to re-run the installer after image updates.
+
+1. Clone this repo alongside your `docker-compose.yml`:
+   ```bash
+   git clone https://github.com/Anquietas86/openwebrx-horus.git
+   ```
+
+2. Copy the example override:
+   ```bash
+   cp openwebrx-horus/docker-compose.override.example.yml docker-compose.override.yml
+   ```
+
+3. Edit `docker-compose.override.yml` to match your volume paths, then:
+   ```bash
+   docker-compose up -d
+   ```
+
+The override mounts the repo into the container (read-only) and runs the patch script on every startup before handing off to OpenWebRX. Everything — pip install, file copies, source patches — happens automatically.
+
 ### Manual install
 
 If you prefer to patch by hand, see the `patches/` directory for the exact changes needed to:

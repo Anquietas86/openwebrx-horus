@@ -1,0 +1,57 @@
+# docker-compose.override.example.yml
+#
+# Drop-in override for an existing OpenWebRX+ docker-compose setup.
+# Mounts the plugin repo and runs the installer on every container start,
+# so Python patches and horusdemodlib survive image updates automatically.
+#
+# Usage:
+#   1. Clone this repo alongside your docker-compose.yml:
+#        git clone https://github.com/Anquietas86/openwebrx-horus.git
+#
+#   2. Copy this file:
+#        cp openwebrx-horus/docker-compose.override.example.yml docker-compose.override.yml
+#
+#   3. Edit the paths below to match your setup, then:
+#        docker-compose up -d
+#
+# docker-compose merges this with your existing docker-compose.yml automatically.
+
+services:
+  openwebrx:
+    volumes:
+      # Mount the plugin repo into the container (read-only)
+      - ./openwebrx-horus:/opt/openwebrx-horus:ro
+
+      # Your existing volumes (adjust paths to match your setup):
+      # - /opt/openwebrx/etc:/etc/openwebrx
+      # - /opt/openwebrx/plugins:/usr/lib/python3/dist-packages/htdocs/plugins
+      # - /opt/openwebrx/var:/var/lib/openwebrx
+
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        # Install horusdemodlib if missing
+        python3 -c "import horusdemodlib" 2>/dev/null || pip3 install --quiet horusdemodlib
+
+        # Copy Python modules
+        cp /opt/openwebrx-horus/owrx/horus.py /usr/lib/python3/dist-packages/owrx/horus.py
+        cp /opt/openwebrx-horus/owrx/chain/horus.py /usr/lib/python3/dist-packages/owrx/chain/horus.py
+
+        # Copy frontend plugin to the plugins directory
+        mkdir -p /usr/lib/python3/dist-packages/htdocs/plugins/horus
+        cp /opt/openwebrx-horus/plugin/horus/horus.js /usr/lib/python3/dist-packages/htdocs/plugins/horus/
+        cp /opt/openwebrx-horus/plugin/horus/horus.css /usr/lib/python3/dist-packages/htdocs/plugins/horus/
+
+        # Ensure init.js loads the horus plugin
+        INIT_JS="/usr/lib/python3/dist-packages/htdocs/plugins/init.js"
+        if [ ! -f "$$INIT_JS" ]; then
+          echo "Plugins.load('horus');" > "$$INIT_JS"
+        elif ! grep -q "'horus'" "$$INIT_JS"; then
+          echo "Plugins.load('horus');" >> "$$INIT_JS"
+        fi
+
+        # Apply Python patches (idempotent)
+        python3 /opt/openwebrx-horus/docker-patch.py /usr/lib/python3/dist-packages
+
+        # Hand off to the real entrypoint
+        exec openwebrx
