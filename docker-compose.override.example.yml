@@ -43,6 +43,8 @@ services:
 
         # Copy Python modules
         cp /opt/openwebrx-horus/owrx/horus.py /usr/lib/python3/dist-packages/owrx/horus.py
+        mkdir -p /usr/lib/python3/dist-packages/owrx/chain
+        touch /usr/lib/python3/dist-packages/owrx/chain/__init__.py
         cp /opt/openwebrx-horus/owrx/chain/horus.py /usr/lib/python3/dist-packages/owrx/chain/horus.py
         echo "[openwebrx-horus] Python modules copied"
 

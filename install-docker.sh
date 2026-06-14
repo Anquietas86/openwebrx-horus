@@ -147,6 +147,8 @@ info "horusdemodlib ready"
 info "Copying Python modules into container..."
 
 docker cp "$SCRIPT_DIR/owrx/horus.py"       "$CONTAINER:$OWRX_PY/owrx/horus.py"
+docker exec "$CONTAINER" mkdir -p "$OWRX_PY/owrx/chain"
+docker exec "$CONTAINER" touch "$OWRX_PY/owrx/chain/__init__.py"
 docker cp "$SCRIPT_DIR/owrx/chain/horus.py" "$CONTAINER:$OWRX_PY/owrx/chain/horus.py"
 info "Copied owrx/horus.py and owrx/chain/horus.py"
 

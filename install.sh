@@ -104,6 +104,7 @@ fi
 # ── Install: copy plugin files ──────────────────────────────────────
 
 mkdir -p "$OWRX/owrx/chain"
+touch "$OWRX/owrx/chain/__init__.py"
 cp "$SCRIPT_DIR/owrx/horus.py"       "$OWRX/owrx/horus.py"
 cp "$SCRIPT_DIR/owrx/chain/horus.py" "$OWRX/owrx/chain/horus.py"
 info "Copied Python modules"
