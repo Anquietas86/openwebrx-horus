@@ -3,19 +3,42 @@
 Idempotent patcher for OpenWebRX+ Python source files.
 
 Adds Horus decoder support to feature.py, modes.py, and service/__init__.py.
-Safe to run multiple times — skips files that are already patched.
+Safe to run multiple times — strips any existing patches first, then re-applies.
 
 Usage:
     python3 docker-patch.py /usr/lib/python3/dist-packages
 """
 
 import os
+import re
 import sys
 
 MARKER = "# openwebrx-horus"
+MARKER_BEGIN = MARKER + " BEGIN"
+MARKER_END = MARKER + " END"
+HTML_MARKER_BEGIN = "<!-- openwebrx-horus BEGIN -->"
+HTML_MARKER_END = "<!-- openwebrx-horus END -->"
 
 
-def patch_file(path, check_str, patch_func):
+def strip_existing_patches(content):
+    """Remove any existing openwebrx-horus marker blocks from content."""
+    lines = content.split("\n")
+    cleaned = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if MARKER_BEGIN in stripped or HTML_MARKER_BEGIN in stripped:
+            skipping = True
+            continue
+        if MARKER_END in stripped or HTML_MARKER_END in stripped:
+            skipping = False
+            continue
+        if not skipping:
+            cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def patch_file(path, patch_func):
     if not os.path.isfile(path):
         print(f"  SKIP {path} (not found)")
         return False
@@ -23,9 +46,8 @@ def patch_file(path, check_str, patch_func):
     with open(path, "r") as f:
         content = f.read()
 
-    if check_str in content:
-        print(f"  OK   {os.path.relpath(path)} (already patched)")
-        return False
+    # Always strip existing patches first for a clean slate
+    content = strip_existing_patches(content)
 
     content = patch_func(content)
 
@@ -128,6 +150,7 @@ def patch_modes(content):
 def patch_service(content):
     m = MARKER
 
+    # Insert imports at the TOP of the file — only match unindented import lines
     import_block = (
         "{m} BEGIN\n"
         "from owrx.chain.horus import HorusDemodulatorChain\n"
@@ -136,13 +159,15 @@ def patch_service(content):
     ).format(m=m)
 
     lines = content.split("\n")
-    last_import_idx = 0
+    last_toplevel_import_idx = 0
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith(("import ", "from ")) and not stripped.startswith("#"):
-            last_import_idx = i
+        # Only match lines with no leading whitespace (top-level imports)
+        if line and not line[0].isspace() and (
+            line.startswith("import ") or line.startswith("from ")
+        ):
+            last_toplevel_import_idx = i
 
-    lines.insert(last_import_idx + 1, import_block)
+    lines.insert(last_toplevel_import_idx + 1, import_block)
 
     # Find the raise ValueError line and detect its indentation
     raise_idx = None
@@ -157,9 +182,9 @@ def patch_service(content):
         demod_lines = [
             indent + m + " BEGIN",
             indent + 'elif mod == "horus_binary":',
-            indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
+            indent + "    return HorusDemodulatorChain(mode_str=\"horus_binary\")",
             indent + 'elif mod == "horus_rtty":',
-            indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+            indent + "    return HorusDemodulatorChain(mode_str=\"horus_rtty\")",
             indent + m + " END",
         ]
         for j, dl in enumerate(demod_lines):
@@ -175,27 +200,24 @@ def main():
         sys.exit(1)
 
     base = sys.argv[1]
-    print(f"Patching OpenWebRX at {base}...")
+    print(f"[openwebrx-horus] Patching OpenWebRX at {base}...")
 
     patch_file(
         os.path.join(base, "owrx", "feature.py"),
-        "horusdemodlib",
         patch_feature,
     )
 
     patch_file(
         os.path.join(base, "owrx", "modes.py"),
-        "horus_binary",
         patch_modes,
     )
 
     patch_file(
         os.path.join(base, "owrx", "service", "__init__.py"),
-        "horus_binary",
         patch_service,
     )
 
-    print("Done.")
+    print("[openwebrx-horus] Patching complete.")
 
 
 if __name__ == "__main__":

@@ -271,12 +271,11 @@ from owrx.chain.horus import HorusDemodulatorChain
 from owrx.horus import HorusParser
 {marker} END'''.format(marker=marker)
 
-# Find the last 'from owrx' or 'import' line before class definitions
+# Find the last top-level (unindented) import line
 lines = content.split('\n')
 last_import_idx = 0
 for i, line in enumerate(lines):
-    stripped = line.strip()
-    if stripped.startswith(('import ', 'from ')) and not stripped.startswith('#'):
+    if line and not line[0].isspace() and (line.startswith('import ') or line.startswith('from ')):
         last_import_idx = i
 
 lines.insert(last_import_idx + 1, import_block)
