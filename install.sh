@@ -283,21 +283,29 @@ lines.insert(last_import_idx + 1, import_block)
 content = '\n'.join(lines)
 
 # 2. Add demodulator mapping — insert before the ValueError raise
-demod_block = '''        {marker} BEGIN
-        elif mod == "horus_binary":
-            return HorusDemodulatorChain(mode_str="horus_binary")
-        elif mod == "horus_rtty":
-            return HorusDemodulatorChain(mode_str="horus_rtty")
-        {marker} END'''.format(marker=marker)
+lines = content.split('\n')
+raise_idx = None
+indent = ""
+for i, line in enumerate(lines):
+    if 'raise ValueError("unsupported service modulation' in line:
+        raise_idx = i
+        indent = line[:len(line) - len(line.lstrip())]
+        break
 
-# Find 'raise ValueError("unsupported service modulation' and insert before it
-content = content.replace(
-    '        raise ValueError("unsupported service modulation',
-    demod_block + '\n        raise ValueError("unsupported service modulation'
-)
+if raise_idx is not None:
+    demod_lines = [
+        indent + marker + " BEGIN",
+        indent + 'elif mod == "horus_binary":',
+        indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
+        indent + 'elif mod == "horus_rtty":',
+        indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+        indent + marker + " END",
+    ]
+    for j, dl in enumerate(demod_lines):
+        lines.insert(raise_idx + j, dl)
 
 with open(path, 'w') as f:
-    f.write(content)
+    f.write('\n'.join(lines))
 PYEOF
     info "Patched service/__init__.py"
 fi

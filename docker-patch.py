@@ -143,23 +143,29 @@ def patch_service(content):
             last_import_idx = i
 
     lines.insert(last_import_idx + 1, import_block)
-    content = "\n".join(lines)
 
-    demod_block = (
-        "        {m} BEGIN\n"
-        '        elif mod == "horus_binary":\n'
-        '            return HorusDemodulatorChain(mode_str="horus_binary")\n'
-        '        elif mod == "horus_rtty":\n'
-        '            return HorusDemodulatorChain(mode_str="horus_rtty")\n'
-        "        {m} END\n"
-    ).format(m=m)
+    # Find the raise ValueError line and detect its indentation
+    raise_idx = None
+    indent = ""
+    for i, line in enumerate(lines):
+        if 'raise ValueError("unsupported service modulation' in line:
+            raise_idx = i
+            indent = line[: len(line) - len(line.lstrip())]
+            break
 
-    content = content.replace(
-        '        raise ValueError("unsupported service modulation',
-        demod_block + '        raise ValueError("unsupported service modulation',
-    )
+    if raise_idx is not None:
+        demod_lines = [
+            indent + m + " BEGIN",
+            indent + 'elif mod == "horus_binary":',
+            indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
+            indent + 'elif mod == "horus_rtty":',
+            indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+            indent + m + " END",
+        ]
+        for j, dl in enumerate(demod_lines):
+            lines.insert(raise_idx + j, dl)
 
-    return content
+    return "\n".join(lines)
 
 
 def main():
