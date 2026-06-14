@@ -32,10 +32,10 @@ services:
         # Install horusdemodlib if missing
         if ! python3 -c "import horusdemodlib" 2>/dev/null; then
           echo "[openwebrx-horus] Installing horusdemodlib..."
-          python3 -m pip install --quiet --break-system-packages horusdemodlib 2>/dev/null \
-            || python3 -m pip install --quiet horusdemodlib 2>/dev/null \
+          python3 -m pip install --break-system-packages horusdemodlib \
+            || python3 -m pip install horusdemodlib \
             || { apt-get update -qq && apt-get install -y -qq python3-pip >/dev/null 2>&1 \
-                 && pip3 install --quiet horusdemodlib; }
+                 && pip3 install --break-system-packages horusdemodlib; }
           echo "[openwebrx-horus] horusdemodlib installed"
         else
           echo "[openwebrx-horus] horusdemodlib already installed"
