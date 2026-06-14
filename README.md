@@ -21,29 +21,49 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 
 ## Installation
 
-1. Install horusdemodlib:
-   ```
-   pip install horusdemodlib
-   ```
+### Quick install (recommended)
 
-2. Copy the Python modules:
-   ```
-   cp owrx/horus.py /opt/openwebrx/owrx/
-   cp owrx/chain/horus.py /opt/openwebrx/owrx/chain/
-   ```
+```bash
+git clone https://github.com/Anquietas86/openwebrx-horus.git
+cd openwebrx-horus
+chmod +x install.sh
+sudo ./install.sh /opt/openwebrx
+sudo systemctl restart openwebrx
+```
 
-3. Copy the frontend files:
-   ```
-   cp htdocs/lib/HorusMessagePanel.js /opt/openwebrx/htdocs/lib/
-   cp htdocs/css/horus.css /opt/openwebrx/htdocs/css/
-   ```
+The installer will:
+- Install `horusdemodlib` via pip if not already present
+- Copy all plugin files (Python modules + frontend) into your OpenWebRX installation
+- Patch the 5 OpenWebRX files needed to register the decoder
+- Back up every file it modifies (`.pre-horus` suffix)
 
-4. Apply the integration patches to OpenWebRX (see `patches/` directory):
-   - `owrx/modes.py` — add Horus mode definitions
-   - `owrx/feature.py` — add horusdemodlib feature detection
-   - `owrx/service/__init__.py` — wire up the demodulator chain and parser
-   - `htdocs/index.html` — add panel div, CSS, and JS includes
-   - `htdocs/openwebrx.js` — register the panel in the message routing
+The script is idempotent — safe to run more than once.
+
+Replace `/opt/openwebrx` with your actual OpenWebRX path if different.
+
+### Uninstall
+
+```bash
+sudo ./install.sh --uninstall /opt/openwebrx
+sudo systemctl restart openwebrx
+```
+
+This removes all plugin files and cleanly strips the patched blocks from OpenWebRX's source files.
+
+### Manual install
+
+If you prefer to patch by hand, see the `patches/` directory for the exact changes needed to:
+- `owrx/feature.py` — add horusdemodlib feature detection
+- `owrx/modes.py` — add Horus mode definitions
+- `owrx/service/__init__.py` — wire up the demodulator chain and parser
+- `htdocs/index.html` — add panel div, CSS, and JS includes
+- `htdocs/openwebrx.js` — register the panel in the message routing
+
+### Post-install setup
+
+1. Open the OpenWebRX **Features** page and confirm `horusdemodlib` shows as available
+2. Set your **receiver callsign** and **GPS position** in Settings (used for SondeHub uploads)
+3. Add a **Horus Binary** profile on your 70cm SDR source (e.g. 434.200 MHz)
 
 ## Architecture
 
