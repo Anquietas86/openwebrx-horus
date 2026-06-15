@@ -59,6 +59,8 @@ class HorusDemodulatorChain:
 
     def setWriter(self, writer):
         self._writer = writer
+        if self._reader is not None and not self._running:
+            self.start()
 
     def start(self):
         if self._running:
