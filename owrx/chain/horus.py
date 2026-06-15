@@ -9,6 +9,7 @@ C modem, and decoded telemetry is emitted as JSON for the HorusParser.
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 
 from owrx.horus import HorusDemodulator, HORUS_SAMPLE_RATE
 
@@ -49,10 +50,41 @@ class HorusDemodulatorChain:
         """Called by HorusDemodulator when a valid frame is decoded."""
         if self._writer and telemetry:
             try:
-                msg = json.dumps(telemetry).encode("utf-8") + b"\n"
+                out = self._format_for_frontend(telemetry)
+                msg = json.dumps(out).encode("utf-8") + b"\n"
+                logger.info("Horus writing decoded frame to output: %s", out.get("callsign", "???"))
                 self._writer.write(msg)
             except Exception:
                 logger.exception("Failed to write decoded Horus telemetry")
+
+    @staticmethod
+    def _format_for_frontend(data: dict) -> dict:
+        out = {
+            "mode": "Horus",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        field_map = {
+            "callsign": "callsign",
+            "latitude": "lat",
+            "longitude": "lon",
+            "altitude": "altitude",
+            "sequence_number": "sequence",
+            "snr": "snr",
+            "modulation": "modulation",
+        }
+        for src, dst in field_map.items():
+            if src in data:
+                out[dst] = data[src]
+        for key in ("temperature", "humidity", "battery", "sats",
+                    "speed", "ascent_rate", "pressure", "battery_voltage"):
+            if key in data:
+                out[key] = data[key]
+        if data.get("custom_field_names"):
+            for name in data["custom_field_names"]:
+                if name in data:
+                    out[name] = data[name]
+            out["custom_field_names"] = data["custom_field_names"]
+        return out
 
     def setReader(self, reader):
         self._reader = reader
