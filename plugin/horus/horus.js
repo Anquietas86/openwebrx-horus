@@ -82,7 +82,7 @@ Plugins.horus = {
         style.id = "horus-plugin-styles";
         style.textContent =
             '#openwebrx-panel-horus-message {' +
-                'max-height: 300px; overflow: hidden; display: flex; flex-direction: column;' +
+                'display: block; max-height: 300px; overflow-y: auto; flex-shrink: 0;' +
                 'background: #1a1a1a; border: 1px solid #444; border-radius: 4px; margin-top: 4px;' +
             '}' +
             '.horus-panel-header {' +

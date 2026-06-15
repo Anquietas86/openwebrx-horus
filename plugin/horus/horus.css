@@ -1,12 +1,10 @@
 /* Horus Balloon Telemetry Plugin */
 
 #openwebrx-panel-horus-message {
+    display: block;
     max-height: 300px;
-    overflow: hidden;
-    display: flex !important;
-    flex-direction: column;
-    height: auto !important;
-    min-height: 0;
+    overflow-y: auto;
+    flex-shrink: 0;
 }
 
 .horus-panel-header {
