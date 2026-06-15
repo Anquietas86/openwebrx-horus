@@ -73,19 +73,37 @@ class HorusDemodulatorChain:
 
     def _run(self):
         logger.info("Horus demod chain started: mode=%s", self.mode_str)
+        bytes_total = 0
+        read_count = 0
 
         while self._running:
             try:
                 data = self._reader.read()
                 if not data:
+                    logger.warning("Horus reader returned empty data, stopping")
                     break
+                bytes_total += len(data)
+                read_count += 1
+                if read_count == 1:
+                    logger.info(
+                        "Horus first audio read: %d bytes (type=%s)",
+                        len(data), type(data).__name__,
+                    )
+                elif read_count % 500 == 0:
+                    logger.info(
+                        "Horus audio stats: %d reads, %.1f KB total",
+                        read_count, bytes_total / 1024,
+                    )
                 self._demod.process(data)
             except Exception:
                 if self._running:
                     logger.exception("Error in Horus demod chain")
                 break
 
-        logger.info("Horus demod chain stopped")
+        logger.info(
+            "Horus demod chain stopped: %d reads, %.1f KB processed",
+            read_count, bytes_total / 1024,
+        )
 
     def stop(self):
         self._running = False

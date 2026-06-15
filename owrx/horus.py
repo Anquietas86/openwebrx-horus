@@ -205,6 +205,7 @@ class HorusDemodulator:
             return None
 
         telemetry["snr"] = frame.snr
+        telemetry["crc_ok"] = True
         telemetry["mode"] = self.mode_str
 
         if self._dial_freq:
