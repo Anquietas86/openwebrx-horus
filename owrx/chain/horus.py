@@ -138,11 +138,23 @@ class HorusDemodulatorChain:
                     data = bytes(data)
                 n_floats = len(data) // 4
                 floats = struct.unpack_from("<%df" % n_floats, data)
+
+                if read_count <= 5 or read_count % 500 == 0:
+                    abs_vals = [abs(s) for s in floats]
+                    peak = max(abs_vals) if abs_vals else 0
+                    rms = (sum(s * s for s in floats) / max(len(floats), 1)) ** 0.5
+                    logger.info(
+                        "Horus audio levels: peak=%.6f rms=%.6f n=%d",
+                        peak, rms, len(floats),
+                    )
+
                 pcm = array.array("h", (
                     max(-32768, min(32767, int(s * 32767)))
                     for s in floats
                 ))
-                self._demod.process(pcm.tobytes())
+                result = self._demod.process(pcm.tobytes())
+                if result is not None:
+                    logger.info("Horus modem returned decoded frame!")
             except Exception:
                 if self._running:
                     logger.exception("Error in Horus demod chain")

@@ -205,8 +205,8 @@ class HorusDemodulator:
 
     def _handle_frame(self, frame: Frame):
         if not frame.crc_pass:
-            logger.debug(
-                "Horus frame CRC fail (SNR: %.1f dB)", frame.snr
+            logger.info(
+                "Horus frame detected but CRC FAIL (SNR: %.1f dB)", frame.snr
             )
             return None
 
