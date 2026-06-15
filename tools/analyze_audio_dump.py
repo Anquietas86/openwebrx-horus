@@ -41,7 +41,7 @@ def read_float_raw(path):
     size = os.path.getsize(path)
     n_samples = size // 4
     with open(path, "rb") as f:
-        data = f.read()
+        data = f.read(n_samples * 4)
     return list(struct.unpack("<%df" % n_samples, data))
 
 

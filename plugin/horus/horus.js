@@ -8,7 +8,7 @@
  */
 
 Plugins.horus = {
-    _version: "1.2.0",
+    _version: "1.3.0",
     _panel: null,
     _tbody: null,
     _maxRows: 200,
@@ -76,18 +76,74 @@ Plugins.horus = {
         setTimeout(function() { clearInterval(checkInterval); }, 30000);
     },
 
+    _injectStyles: function() {
+        if (document.getElementById("horus-plugin-styles")) return;
+        var style = document.createElement("style");
+        style.id = "horus-plugin-styles";
+        style.textContent =
+            '#openwebrx-panel-horus-message {' +
+                'max-height: 300px; overflow: hidden; display: flex; flex-direction: column;' +
+                'background: #1a1a1a; border: 1px solid #444; border-radius: 4px; margin-top: 4px;' +
+            '}' +
+            '.horus-panel-header {' +
+                'display: flex; justify-content: space-between; align-items: center;' +
+                'padding: 4px 8px; background: #2a2a2a; border-bottom: 1px solid #444;' +
+            '}' +
+            '.horus-title { font-weight: bold; font-size: 12px; color: #eee; }' +
+            '.horus-clear-btn {' +
+                'background: none; border: 1px solid #555; color: #aaa; cursor: pointer;' +
+                'padding: 1px 6px; font-size: 11px; border-radius: 3px;' +
+            '}' +
+            '.horus-clear-btn:hover { background: #444; color: #fff; }' +
+            '.horus-table-wrap { overflow-y: auto; flex: 1; min-height: 0; }' +
+            '#openwebrx-panel-horus-message table {' +
+                'width: 100%; border-collapse: collapse; font-size: 12px; font-family: monospace;' +
+            '}' +
+            '#openwebrx-panel-horus-message thead th {' +
+                'position: sticky; top: 0; background: #333; color: #eee;' +
+                'padding: 4px 6px; text-align: left; font-weight: bold; border-bottom: 1px solid #555;' +
+            '}' +
+            '#openwebrx-panel-horus-message tbody tr:nth-child(even) { background: rgba(255,255,255,0.03); }' +
+            '#openwebrx-panel-horus-message tbody tr:hover { background: rgba(255,255,255,0.08); }' +
+            '#openwebrx-panel-horus-message td {' +
+                'padding: 3px 6px; white-space: nowrap; border-bottom: 1px solid rgba(255,255,255,0.05);' +
+            '}' +
+            '#openwebrx-panel-horus-message .time { width: 65px; color: #aaa; }' +
+            '#openwebrx-panel-horus-message .callsign { width: 90px; font-weight: bold; }' +
+            '#openwebrx-panel-horus-message .callsign a { color: #4fc3f7; text-decoration: none; }' +
+            '#openwebrx-panel-horus-message .sequence { width: 45px; text-align: right; color: #aaa; }' +
+            '#openwebrx-panel-horus-message .position a { color: #81c784; text-decoration: none; }' +
+            '#openwebrx-panel-horus-message .altitude { width: 80px; text-align: right; color: #ffb74d; font-weight: bold; }' +
+            '#openwebrx-panel-horus-message .snr { width: 65px; text-align: right; }' +
+            '#openwebrx-panel-horus-message .sensors { color: #bbb; font-size: 11px; }';
+        document.head.appendChild(style);
+    },
+
     _createPanel: function() {
+        this._injectStyles();
+
         var container = document.getElementById("openwebrx-panels-container-left");
         if (!container) {
             container = document.body;
         }
 
+        // Hide the secondary FFT grey box and insert our panel in its place
+        var digiPanel = document.getElementById("openwebrx-panel-digimodes");
+        if (!digiPanel) {
+            // Try other common IDs for the secondary demod panel
+            var candidates = container.querySelectorAll(".openwebrx-panel");
+            for (var i = 0; i < candidates.length; i++) {
+                var c = candidates[i];
+                if (c.id && c.id.indexOf("message") === -1 && c.style.display !== "none") {
+                    digiPanel = c;
+                    break;
+                }
+            }
+        }
+
         var panel = document.createElement("div");
         panel.id = "openwebrx-panel-horus-message";
-        panel.className = "openwebrx-panel openwebrx-message-panel";
         panel.style.display = "none";
-        panel.style.width = "619px";
-        panel.setAttribute("data-panel-name", "horus-message");
 
         panel.innerHTML =
             '<div class="horus-panel-header">' +
@@ -109,7 +165,14 @@ Plugins.horus = {
                 '</table>' +
             '</div>';
 
-        container.appendChild(panel);
+        if (digiPanel) {
+            digiPanel.style.display = "none";
+            digiPanel.parentNode.insertBefore(panel, digiPanel);
+            console.log("[horus] Replaced digimodes panel:", digiPanel.id || digiPanel.className);
+        } else {
+            container.insertBefore(panel, container.firstChild);
+            console.log("[horus] Inserted panel at top of container (no digimodes panel found)");
+        }
 
         this._panel = panel;
         this._tbody = panel.querySelector("tbody");
@@ -118,7 +181,6 @@ Plugins.horus = {
         panel.querySelector(".horus-clear-btn").addEventListener("click", function() {
             self._tbody.innerHTML = "";
         });
-        console.log("[horus] Panel created");
     },
 
     _pushMessage: function(msg) {

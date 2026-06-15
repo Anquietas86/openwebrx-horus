@@ -47,6 +47,8 @@ class HorusDemodulatorChain:
     DUMP_PATH_12K = "/tmp/horus_audio_12k.raw"
     DUMP_PATH_48K = "/tmp/horus_audio_48k.raw"
 
+    TEST_INJECT = True
+
     def __init__(self, mode_str: str = "horus_binary"):
         self.mode_str = mode_str
         self._writer = None
@@ -72,7 +74,11 @@ class HorusDemodulatorChain:
 
     def _on_decode(self, telemetry: dict):
         """Called by HorusDemodulator when a valid frame is decoded."""
-        if not self._writer or not telemetry:
+        if not telemetry:
+            return
+        if not self._writer:
+            logger.warning("Horus decode arrived but no writer connected — frame dropped: %s",
+                           telemetry.get("callsign", "???"))
             return
         try:
             HorusParser.updateMap(telemetry, self._band)
@@ -178,10 +184,15 @@ class HorusDemodulatorChain:
         ratio = HORUS_SAMPLE_RATE / max(src_rate, 1)
         logger.info(
             "Horus demod chain started: mode=%s src_rate=%d modem_rate=%d "
-            "resample_ratio=%.3f invert=%s",
+            "resample_ratio=%.3f invert=%s test_inject=%s",
             self.mode_str, src_rate, HORUS_SAMPLE_RATE, ratio,
-            self._invert_spectrum,
+            self._invert_spectrum, self.TEST_INJECT,
         )
+
+        if self.TEST_INJECT:
+            self._run_test_inject(src_rate)
+            return
+
         bytes_total = 0
         samples_total = 0
         read_count = 0
@@ -272,6 +283,101 @@ class HorusDemodulatorChain:
             "Horus demod chain stopped: %d reads, %.1f KB processed",
             read_count, bytes_total / 1024,
         )
+
+    @staticmethod
+    def _generate_test_audio(src_rate, num_packets=10):
+        """Generate known-good 4FSK audio in memory at src_rate Hz."""
+        from horusdemodlib.encoder import Encoder
+
+        center_freq = 1500
+        tone_spacing = 270
+        symbol_rate = 100
+        tone_freqs = [
+            center_freq - 1.5 * tone_spacing,
+            center_freq - 0.5 * tone_spacing,
+            center_freq + 0.5 * tone_spacing,
+            center_freq + 1.5 * tone_spacing,
+        ]
+
+        def build_payload(seq):
+            payload = bytearray(22)
+            payload[0] = 1
+            struct.pack_into("<H", payload, 1, seq & 0xFFFF)
+            payload[3], payload[4], payload[5] = 12, 34, 56
+            struct.pack_into("<f", payload, 6, -34.9285)
+            struct.pack_into("<f", payload, 10, 138.6007)
+            struct.pack_into("<H", payload, 14, 25000)
+            payload[16], payload[17], payload[18], payload[19] = 5, 10, 236, 37
+            crc = 0xFFFF
+            for byte in payload[:20]:
+                crc ^= byte << 8
+                for _ in range(8):
+                    crc = ((crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1) & 0xFFFF
+            struct.pack_into("<H", payload, 20, crc)
+            return bytes(payload)
+
+        enc = Encoder()
+        samples = [0.0] * int(2.0 * src_rate)
+        two_pi = 2.0 * math.pi
+
+        for seq in range(num_packets):
+            payload = build_payload(seq)
+            encoded, _ = enc.horus_l2_encode_packet(payload)
+            symbols = enc.bytes_to_4fsk_symbols(encoded)
+
+            phase = 0.0
+            sps = src_rate / symbol_rate
+            for sym in symbols:
+                freq = tone_freqs[sym]
+                n = int(round(sps))
+                for j in range(n):
+                    samples.append(0.8 * math.sin(phase))
+                    phase += two_pi * freq / src_rate
+                phase %= two_pi
+            samples.extend([0.0] * int(2.0 * src_rate))
+
+        enc.close()
+        logger.info("Test inject: generated %d packets, %d samples (%.1fs) at %d Hz",
+                     num_packets, len(samples), len(samples) / src_rate, src_rate)
+        return samples
+
+    def _run_test_inject(self, src_rate):
+        """Generate test audio in memory and feed through the full chain."""
+        all_floats = self._generate_test_audio(src_rate)
+
+        chunk_size = int(src_rate * 0.063)
+        resample_state = None
+        offset = 0
+        chunk_count = 0
+
+        while offset < len(all_floats) and self._running:
+            end = min(offset + chunk_size, len(all_floats))
+            floats = all_floats[offset:end]
+            offset = end
+            chunk_count += 1
+
+            if not self._demod:
+                continue
+
+            resampled, resample_state = self._resample_continuous(
+                floats, src_rate, HORUS_SAMPLE_RATE, resample_state
+            )
+
+            peak = max((abs(s) for s in resampled), default=0.0)
+            if peak > 1e-6:
+                scale = 30000.0 / peak
+            else:
+                scale = 32767.0
+
+            pcm = array.array("h", (
+                max(-32768, min(32767, int(s * scale)))
+                for s in resampled
+            ))
+            self._demod.process(pcm.tobytes())
+
+            time.sleep(chunk_size / src_rate)
+
+        logger.info("Test inject complete: %d chunks fed to modem", chunk_count)
 
     def stop(self):
         self._running = False

@@ -3,8 +3,10 @@
 #openwebrx-panel-horus-message {
     max-height: 300px;
     overflow: hidden;
-    display: flex;
+    display: flex !important;
     flex-direction: column;
+    height: auto !important;
+    min-height: 0;
 }
 
 .horus-panel-header {
