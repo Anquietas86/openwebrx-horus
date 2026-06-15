@@ -225,22 +225,26 @@ def generate_4fsk_audio(symbols, sample_rate=48000, symbol_rate=100,
 
 
 def encode_packet(payload):
-    """Full Horus Binary v2 encode: payload → 4FSK symbols."""
-    # Golay FEC
+    """Full Horus Binary v2 encode: payload → 4FSK symbols.
+
+    Uses horusdemodlib's official Encoder (C library) when available,
+    falls back to the pure-Python implementation otherwise.
+    """
+    try:
+        from horusdemodlib.encoder import Encoder
+        enc = Encoder()
+        symbols = enc.bytes_to_4fsk_symbols(payload)
+        enc.close()
+        return list(symbols)
+    except ImportError:
+        pass
+
+    # Fallback: pure-Python encoding
     encoded_bits = golay_encode_bytes(payload)
-
-    # Interleave
     interleaved = interleave(encoded_bits)
-
-    # Scramble
     scrambled = scramble(interleaved)
-
-    # Build frame: preamble + unique word + data
     frame_bits = PREAMBLE + UNIQUE_WORD_V2 + scrambled
-
-    # Convert to 4FSK symbols
     symbols = bits_to_symbols(frame_bits)
-
     return symbols
 
 
@@ -344,26 +348,50 @@ Examples:
     # Leading silence (1 second)
     all_iq.extend(generate_silence_iq(1.0, args.iq_rate).tobytes())
 
+    # Use official encoder if available
+    _official_encoder = None
+    try:
+        from horusdemodlib.encoder import Encoder
+        _official_encoder = Encoder()
+        print("  Using horusdemodlib official encoder")
+    except ImportError:
+        print("  WARNING: horusdemodlib not installed, using fallback encoder")
+        print("  Install with: pip3 install horusdemodlib")
+
     for seq in range(args.packets):
         print(f"  Packet {seq + 1}/{args.packets} (seq={seq})")
 
-        # Build payload — simulate ascending balloon
         alt = args.alt + seq * 500
-        payload = build_horus_v2_payload(
-            payload_id=args.payload_id,
-            sequence=seq,
-            hours=12, minutes=34, seconds=56 + seq,
-            latitude=args.lat + seq * 0.001,
-            longitude=args.lon + seq * 0.001,
-            altitude=min(alt, 65535),
-            speed=5,
-            sats=10,
-            temp=-20 - seq,
-            battery_mv=3700,
-        )
 
-        # Encode → 4FSK symbols → audio → IQ
-        symbols = encode_packet(payload)
+        if _official_encoder:
+            payload = _official_encoder.create_horus_v2_packet(
+                payload_id=args.payload_id,
+                sequence_number=seq,
+                hours=12, minutes=34, seconds=56 + seq,
+                latitude=args.lat + seq * 0.001,
+                longitude=args.lon + seq * 0.001,
+                altitude=min(alt, 65535),
+                speed=5,
+                satellites=10,
+                temperature=-20 - seq,
+                battery_voltage=3.7,
+            )
+            symbols = _official_encoder.bytes_to_4fsk_symbols(payload)
+        else:
+            payload = build_horus_v2_payload(
+                payload_id=args.payload_id,
+                sequence=seq,
+                hours=12, minutes=34, seconds=56 + seq,
+                latitude=args.lat + seq * 0.001,
+                longitude=args.lon + seq * 0.001,
+                altitude=min(alt, 65535),
+                speed=5,
+                sats=10,
+                temp=-20 - seq,
+                battery_mv=3700,
+            )
+            symbols = encode_packet(payload)
+
         audio = generate_4fsk_audio(symbols)
         iq = fm_modulate(audio, iq_rate=args.iq_rate)
         all_iq.extend(iq.tobytes())
@@ -407,6 +435,9 @@ Examples:
             sys.exit(1)
         except KeyboardInterrupt:
             print("\n  Stopped.")
+
+    if _official_encoder:
+        _official_encoder.close()
 
 
 if __name__ == "__main__":
