@@ -193,7 +193,7 @@ Plugins.horus = {
             // Strip framework panel classes that collapse height to 0,
             // then apply our own layout styles
             el.className = "";
-            el.style.cssText = "display:block; max-height:300px; overflow-y:auto; flex-shrink:0; width:619px; margin-top:4px;";
+            el.style.cssText = "display:block; max-height:300px; overflow-y:auto; flex-shrink:0; width:619px; margin-top:4px; background:rgba(0,0,0,0.85);";
             // Also hide the empty digimodes grey box
             var digi = document.getElementById("openwebrx-panel-digimodes");
             if (digi) digi.style.display = "none";
