@@ -72,14 +72,11 @@ class HorusDemodulatorChain:
         self._thread.start()
 
     def _run(self):
-        # Read audio in chunks matching the modem's expected input size.
-        # 16-bit mono at 48 kHz = 96000 bytes/sec. Read ~100ms chunks.
-        chunk_size = HORUS_SAMPLE_RATE * 2 // 10  # 9600 bytes = 100ms
         logger.info("Horus demod chain started: mode=%s", self.mode_str)
 
         while self._running:
             try:
-                data = self._reader.read(chunk_size)
+                data = self._reader.read()
                 if not data:
                     break
                 self._demod.process(data)
