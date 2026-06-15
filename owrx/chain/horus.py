@@ -152,9 +152,7 @@ class HorusDemodulatorChain:
                     max(-32768, min(32767, int(s * 32767)))
                     for s in floats
                 ))
-                result = self._demod.process(pcm.tobytes())
-                if result is not None:
-                    logger.info("Horus modem returned decoded frame!")
+                self._demod.process(pcm.tobytes())
             except Exception:
                 if self._running:
                     logger.exception("Error in Horus demod chain")

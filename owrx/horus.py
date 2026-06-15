@@ -85,20 +85,21 @@ class HorusSondehubUploader:
     def _init_uploader(self):
         try:
             pm = Config.get()
-            callsign = pm.get("receiver_callsign", "N0CALL")
-            gps = pm.get("receiver_gps", {})
-            lat = gps.get("lat", 0.0)
-            lon = gps.get("lon", 0.0)
-            alt = gps.get("alt", 0)
+            callsign = pm["receiver_callsign"] if "receiver_callsign" in pm else "N0CALL"
+            gps = pm["receiver_gps"] if "receiver_gps" in pm else {}
+            lat = gps.get("lat", 0.0) if isinstance(gps, dict) else getattr(gps, "lat", 0.0)
+            lon = gps.get("lon", 0.0) if isinstance(gps, dict) else getattr(gps, "lon", 0.0)
+            alt = gps.get("alt", 0) if isinstance(gps, dict) else getattr(gps, "alt", 0)
 
             position = (lat, lon, alt) if lat != 0 or lon != 0 else None
+            antenna = pm["receiver_antenna"] if "receiver_antenna" in pm else "Unknown"
 
             self._uploader = SondehubAmateurUploader(
                 upload_rate=2,
                 user_callsign=str(callsign),
                 user_position=position,
                 user_radio="OpenWebRX",
-                user_antenna=pm.get("receiver_antenna", "Unknown"),
+                user_antenna=str(antenna),
                 software_name="openwebrx-horus",
                 software_version="1.0.0",
                 inhibit=False,
@@ -168,6 +169,7 @@ class HorusDemodulator:
         self.callback = callback
         self._lock = threading.Lock()
         self._dial_freq = None
+        self._sample_count = 0
 
         lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
         self._demod = HorusLib(
@@ -175,15 +177,21 @@ class HorusDemodulator:
             sample_rate=HORUS_SAMPLE_RATE,
             stereo_iq=False,
             verbose=False,
+            callback=self._on_frame,
         )
 
         logger.info("Horus demodulator initialized: mode=%s (v1)", mode_str)
+
+    def _on_frame(self, frame: Frame):
+        """HorusLib callback — fires for every frame with data."""
+        self._handle_frame(frame)
+
     def setDialFrequency(self, frequency: int):
         self._dial_freq = frequency
 
     def process(self, audio_bytes: bytes):
-        """Feed 16-bit signed PCM audio. Calls back with decoded telemetry."""
-        self._sample_count = getattr(self, "_sample_count", 0) + len(audio_bytes) // 2
+        """Feed 16-bit signed PCM audio. Decoded frames arrive via callback."""
+        self._sample_count += len(audio_bytes) // 2
         if self._sample_count <= len(audio_bytes) // 2:
             logger.info(
                 "Horus modem receiving audio: %d bytes (%d int16 samples)",
@@ -191,22 +199,12 @@ class HorusDemodulator:
             )
 
         with self._lock:
-            frame = self._demod.add_samples(audio_bytes)
-
-        if frame is None:
-            if self._sample_count % (HORUS_SAMPLE_RATE * 10) < len(audio_bytes) // 2:
-                logger.debug(
-                    "Horus modem: %d samples fed (%.1fs), no frame yet",
-                    self._sample_count, self._sample_count / HORUS_SAMPLE_RATE,
-                )
-            return None
-
-        return self._handle_frame(frame)
+            self._demod.add_samples(audio_bytes)
 
     def _handle_frame(self, frame: Frame):
         if not frame.crc_pass:
-            logger.info(
-                "Horus frame detected but CRC FAIL (SNR: %.1f dB)", frame.snr
+            logger.debug(
+                "Horus frame CRC fail (SNR: %.1f dB)", frame.snr
             )
             return None
 
