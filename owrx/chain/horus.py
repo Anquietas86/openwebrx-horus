@@ -9,6 +9,7 @@ handler (matching the AudioChopperDemodulator pattern).
 
 import array
 import logging
+import math
 import pickle
 import struct
 import threading
@@ -41,6 +42,11 @@ class HorusDemodulatorChain:
     secondary_demod websocket messages to the client.
     """
 
+    DUMP_AUDIO = True
+    DUMP_SECONDS = 15
+    DUMP_PATH_12K = "/tmp/horus_audio_12k.raw"
+    DUMP_PATH_48K = "/tmp/horus_audio_48k.raw"
+
     def __init__(self, mode_str: str = "horus_binary"):
         self.mode_str = mode_str
         self._writer = None
@@ -51,6 +57,10 @@ class HorusDemodulatorChain:
         self._band = None
         self._sample_rate = None
         self._demod = None
+        self._invert_spectrum = False
+        self._dump_12k = None
+        self._dump_48k = None
+        self._dump_samples = 0
 
     def setDialFrequency(self, frequency: int):
         self._demod.setDialFrequency(frequency)
@@ -126,13 +136,57 @@ class HorusDemodulatorChain:
         )
         self._thread.start()
 
+    @staticmethod
+    def _resample_continuous(samples, src_rate, dst_rate, state=None):
+        """Resample with phase and last-sample carry across chunks.
+
+        state is (phase, prev_last_sample) or None for the first call.
+        Returns (output_samples, new_state).
+        """
+        if len(samples) < 2:
+            last = samples[-1] if samples else 0.0
+            return list(samples), (0.0, last)
+        if src_rate == dst_rate:
+            return list(samples), (0.0, samples[-1])
+
+        step = src_rate / dst_rate
+        if state is not None:
+            pos, prev_last = state
+        else:
+            pos, prev_last = 0.0, samples[0]
+
+        out = []
+        n = len(samples)
+        while pos < n - 1:
+            idx = math.floor(pos)
+            frac = pos - idx
+            if idx >= 0:
+                val = samples[idx] * (1.0 - frac) + samples[idx + 1] * frac
+            elif idx == -1:
+                val = prev_last * (1.0 - frac) + samples[0] * frac
+            else:
+                pos += step
+                continue
+            out.append(val)
+            pos += step
+        new_phase = pos - n
+        return out, (new_phase, samples[-1])
+
     def _run(self):
-        logger.info("Horus demod chain started: mode=%s sample_rate=%s",
-                     self.mode_str, self._sample_rate)
+        configured_rate = self._sample_rate or HORUS_SAMPLE_RATE
+        src_rate = configured_rate
+        ratio = HORUS_SAMPLE_RATE / max(src_rate, 1)
+        logger.info(
+            "Horus demod chain started: mode=%s src_rate=%d modem_rate=%d "
+            "resample_ratio=%.3f invert=%s",
+            self.mode_str, src_rate, HORUS_SAMPLE_RATE, ratio,
+            self._invert_spectrum,
+        )
         bytes_total = 0
         samples_total = 0
         read_count = 0
         t_start = time.monotonic()
+        resample_state = None
 
         while self._running:
             try:
@@ -145,40 +199,55 @@ class HorusDemodulatorChain:
                 if isinstance(data, memoryview):
                     data = bytes(data)
                 n_floats = len(data) // 4
-                floats = struct.unpack_from("<%df" % n_floats, data)
+                floats = list(struct.unpack_from("<%df" % n_floats, data))
                 samples_total += n_floats
 
                 if read_count == 1:
                     logger.info(
-                        "Horus first audio read: %d bytes (%d float32 samples, type=%s, "
-                        "bytes_per_sample=%.1f)",
-                        len(data), n_floats, type(data).__name__,
-                        len(data) / max(n_floats, 1),
+                        "Horus first audio read: %d bytes (%d float32 samples)",
+                        len(data), n_floats,
                     )
                 elif read_count % 500 == 0:
                     elapsed = time.monotonic() - t_start
-                    measured_rate = samples_total / elapsed if elapsed > 0 else 0
+                    measured = samples_total / elapsed if elapsed > 0 else 0
                     logger.info(
                         "Horus audio stats: %d reads, %.1f KB, "
-                        "configured_rate=%s measured_rate=%.0f Hz",
+                        "configured_rate=%d measured_throughput=%.0f Hz "
+                        "resample_ratio=%.3f",
                         read_count, bytes_total / 1024,
-                        self._sample_rate, measured_rate,
-                    )
-
-                if read_count <= 3 or read_count % 500 == 0:
-                    abs_vals = [abs(s) for s in floats]
-                    peak = max(abs_vals) if abs_vals else 0
-                    rms = (sum(s * s for s in floats) / max(len(floats), 1)) ** 0.5
-                    logger.info(
-                        "Horus audio levels: peak=%.6f rms=%.6f n=%d",
-                        peak, rms, len(floats),
+                        src_rate, measured, ratio,
                     )
 
                 if not self._demod:
                     continue
-                # Normalize amplitude to maximise modem SNR — FSK carries
-                # information in frequency, not amplitude.
-                peak = max((abs(s) for s in floats), default=0.0)
+
+                if self._invert_spectrum:
+                    floats = [-s for s in floats]
+
+                # Diagnostic audio dump
+                if self.DUMP_AUDIO and self._dump_samples < self.DUMP_SECONDS * src_rate:
+                    if self._dump_12k is None:
+                        self._dump_12k = open(self.DUMP_PATH_12K, "wb")
+                        self._dump_48k = open(self.DUMP_PATH_48K, "wb")
+                        logger.info("Horus audio dump started: %s, %s",
+                                    self.DUMP_PATH_12K, self.DUMP_PATH_48K)
+                    self._dump_12k.write(struct.pack("<%df" % len(floats), *floats))
+                    self._dump_samples += len(floats)
+                elif self._dump_12k is not None:
+                    self._dump_12k.close()
+                    self._dump_12k = None
+                    logger.info("Horus 12k audio dump complete: %d samples (%.1fs)",
+                                self._dump_samples, self._dump_samples / src_rate)
+
+                resampled, resample_state = self._resample_continuous(
+                    floats, src_rate, HORUS_SAMPLE_RATE, resample_state
+                )
+
+                # Dump resampled audio
+                if self.DUMP_AUDIO and self._dump_48k is not None and not self._dump_48k.closed:
+                    self._dump_48k.write(struct.pack("<%df" % len(resampled), *resampled))
+
+                peak = max((abs(s) for s in resampled), default=0.0)
                 if peak > 1e-6:
                     scale = 30000.0 / peak
                 else:
@@ -186,13 +255,12 @@ class HorusDemodulatorChain:
                 if read_count <= 3:
                     logger.info(
                         "Horus int16 scaling: peak=%.6f scale=%.1f "
-                        "(effective range ±%d)",
-                        peak, scale,
-                        min(32767, int(peak * scale)),
+                        "in=%d out=%d samples",
+                        peak, scale, len(floats), len(resampled),
                     )
                 pcm = array.array("h", (
                     max(-32768, min(32767, int(s * scale)))
-                    for s in floats
+                    for s in resampled
                 ))
                 self._demod.process(pcm.tobytes())
             except Exception:
@@ -215,14 +283,17 @@ class HorusDemodulatorChain:
 
     def setSampleRate(self, rate):
         self._sample_rate = rate
-        logger.info("Horus chain setSampleRate: %d Hz", rate)
+        logger.info(
+            "Horus chain setSampleRate: framework=%d Hz, modem=%d Hz (resample %.3fx)",
+            rate, HORUS_SAMPLE_RATE, HORUS_SAMPLE_RATE / max(rate, 1),
+        )
         with self._lock:
             if self._demod:
                 self._demod.close()
             self._demod = HorusDemodulator(
                 mode_str=self.mode_str,
                 callback=self._on_decode,
-                sample_rate=rate,
+                sample_rate=HORUS_SAMPLE_RATE,
             )
 
     def getFixedAudioRate(self):

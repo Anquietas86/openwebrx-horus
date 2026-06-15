@@ -249,8 +249,51 @@ def encode_packet(payload):
 
 # ── FM modulation to IQ ──────────────────────────────────────────────
 
+def direct_fsk_iq(symbols, iq_rate=2_000_000, symbol_rate=100,
+                  tone_spacing=270):
+    """Generate direct FSK IQ: carrier frequency shifts between 4 tones.
+
+    This is how real Horus transmitters work — the RF carrier itself
+    shifts frequency, no audio FM subcarrier.  The receiver uses USB
+    mode and sees the frequency shifts as audio tones.
+    """
+    samples_per_symbol = iq_rate // symbol_rate
+    tone_offsets = np.array([
+        -1.5 * tone_spacing,   # symbol 0: -405 Hz
+        -0.5 * tone_spacing,   # symbol 1: -135 Hz
+        +0.5 * tone_spacing,   # symbol 2: +135 Hz
+        +1.5 * tone_spacing,   # symbol 3: +405 Hz
+    ])
+
+    n_total = len(symbols) * samples_per_symbol
+    phase = np.zeros(n_total, dtype=np.float64)
+
+    for i, sym in enumerate(symbols):
+        start = i * samples_per_symbol
+        end = start + samples_per_symbol
+        phase[start:end] = tone_offsets[sym]
+
+    phase_acc = 2 * np.pi * np.cumsum(phase) / iq_rate
+
+    i_samples = np.cos(phase_acc)
+    q_samples = np.sin(phase_acc)
+
+    i_int8 = np.clip(i_samples * 127, -127, 127).astype(np.int8)
+    q_int8 = np.clip(q_samples * 127, -127, 127).astype(np.int8)
+
+    iq = np.empty(2 * n_total, dtype=np.int8)
+    iq[0::2] = i_int8
+    iq[1::2] = q_int8
+
+    return iq
+
+
 def fm_modulate(audio, audio_rate=48000, iq_rate=2_000_000, deviation=2000):
-    """FM-modulate baseband audio into IQ samples for HackRF."""
+    """FM-modulate baseband audio into IQ samples for HackRF.
+
+    DEPRECATED: Use direct_fsk_iq() instead. FM-of-audio spreads energy
+    across a wide RF bandwidth, giving poor SNR with narrowband receivers.
+    """
     # Resample audio to IQ rate
     duration = len(audio) / audio_rate
     n_iq = int(duration * iq_rate)
@@ -366,8 +409,7 @@ Examples:
         )
         symbols = encode_packet(payload)
 
-        audio = generate_4fsk_audio(symbols)
-        iq = fm_modulate(audio, iq_rate=args.iq_rate)
+        iq = direct_fsk_iq(symbols, iq_rate=args.iq_rate)
         all_iq.extend(iq.tobytes())
 
         # Gap between packets

@@ -116,8 +116,8 @@ def patch_modes(content):
         "        DigitalMode(\n"
         '            modulation="horus_binary",\n'
         '            name="Horus Binary",\n'
-        '            underlying=["nfm"],\n'
-        "            bandpass=Bandpass(-6000, 6000),\n"
+        '            underlying=["usb"],\n'
+        "            bandpass=Bandpass(100, 4000),\n"
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
         "            squelch=False,\n"
