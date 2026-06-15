@@ -6,12 +6,12 @@ Audio from csdr (NFM demod, 48 kHz, 16-bit signed) is piped into horusdemodlib's
 C modem, and decoded telemetry is emitted as JSON for the HorusParser.
 """
 
+import array
 import json
 import logging
+import struct
 import threading
 from datetime import datetime, timezone
-
-import numpy as np
 
 from owrx.horus import HorusDemodulator, HORUS_SAMPLE_RATE
 
@@ -136,8 +136,12 @@ class HorusDemodulatorChain:
                     )
                 if isinstance(data, memoryview):
                     data = bytes(data)
-                samples = np.frombuffer(data, dtype=np.float32)
-                pcm = np.clip(samples * 32767, -32768, 32767).astype(np.int16)
+                n_floats = len(data) // 4
+                floats = struct.unpack_from("<%df" % n_floats, data)
+                pcm = array.array("h", (
+                    max(-32768, min(32767, int(s * 32767)))
+                    for s in floats
+                ))
                 self._demod.process(pcm.tobytes())
             except Exception:
                 if self._running:
