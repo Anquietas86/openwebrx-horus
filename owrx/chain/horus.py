@@ -11,6 +11,8 @@ import logging
 import threading
 from datetime import datetime, timezone
 
+import numpy as np
+
 from owrx.horus import HorusDemodulator, HORUS_SAMPLE_RATE
 
 try:
@@ -134,7 +136,9 @@ class HorusDemodulatorChain:
                     )
                 if isinstance(data, memoryview):
                     data = bytes(data)
-                self._demod.process(data)
+                samples = np.frombuffer(data, dtype=np.float32)
+                pcm = np.clip(samples * 32767, -32768, 32767).astype(np.int16)
+                self._demod.process(pcm.tobytes())
             except Exception:
                 if self._running:
                     logger.exception("Error in Horus demod chain")
