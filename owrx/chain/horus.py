@@ -18,6 +18,12 @@ try:
 except ImportError:
     Format = None
 
+try:
+    from csdr.chain.demodulator import SecondaryDemodulator, FixedAudioRateChain
+except ImportError:
+    SecondaryDemodulator = None
+    FixedAudioRateChain = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,7 +154,7 @@ class HorusDemodulatorChain:
             self._thread.join(timeout=2.0)
 
     def setSampleRate(self, rate):
-        pass
+        logger.info("Horus chain setSampleRate: %d Hz", rate)
 
     def getFixedAudioRate(self):
         return HORUS_SAMPLE_RATE
@@ -166,3 +172,9 @@ class HorusDemodulatorChain:
 
     def supportsSquelch(self):
         return False
+
+
+if FixedAudioRateChain is not None:
+    FixedAudioRateChain.register(HorusDemodulatorChain)
+if SecondaryDemodulator is not None:
+    SecondaryDemodulator.register(HorusDemodulatorChain)
