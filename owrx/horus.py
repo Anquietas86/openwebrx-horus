@@ -55,15 +55,6 @@ HORUS_MODES = {
     "horus_rtty": Mode.RTTY_7N2,
 }
 
-# horusdemodlib bug: Mode.BINARY_V2 maps to V1's C constant (0).
-# The actual v2 mode value in the C library is 1.
-_HORUS_V2_MODE = None
-try:
-    import _horus_api_cffi
-    _HORUS_V2_MODE = _horus_api_cffi.lib.HORUS_MODE_BINARY_V2_256BIT
-except Exception:
-    pass
-
 HORUS_SAMPLE_RATE = 48000
 
 
@@ -186,19 +177,7 @@ class HorusDemodulator:
             verbose=False,
         )
 
-        if mode_str == "horus_binary" and _HORUS_V2_MODE is not None:
-            api = _horus_api_cffi.lib
-            api.horus_close(self._demod.hstates)
-            self._demod.hstates = api.horus_open_advanced(
-                _HORUS_V2_MODE, -1, -1
-            )
-            self._demod.max_demod_in = api.horus_get_max_demod_in(self._demod.hstates)
-            self._demod.max_ascii_out = api.horus_get_max_ascii_out_len(self._demod.hstates)
-            self._demod.mfsk = api.horus_get_mFSK(self._demod.hstates)
-            logger.info("Horus demodulator initialized: mode=%s (v2, C mode=%d)", mode_str, _HORUS_V2_MODE)
-        else:
-            logger.info("Horus demodulator initialized: mode=%s", mode_str)
-
+        logger.info("Horus demodulator initialized: mode=%s (v1)", mode_str)
     def setDialFrequency(self, frequency: int):
         self._dial_freq = frequency
 

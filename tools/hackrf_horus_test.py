@@ -2,8 +2,12 @@
 """
 Generate a Horus Binary 4FSK test signal and transmit via HackRF One.
 
-Creates valid Horus Binary v2 packets, 4FSK modulates them, FM-modulates
-into IQ samples, and either saves to file or pipes directly to hackrf_transfer.
+Creates valid Horus Binary v1 packets (22 bytes), 4FSK modulates them,
+FM-modulates into IQ samples, and either saves to file or pipes directly
+to hackrf_transfer.
+
+Note: The horusdemodlib C library in the current Docker image only supports
+v1 mode (HORUS_MODE_BINARY_V1). The v2 constant exists but segfaults.
 
 Requirements (on the machine with the HackRF):
     pip install numpy
@@ -33,13 +37,13 @@ import os
 import numpy as np
 
 
-# ── Horus Binary v2 packet format ─────────────────────────────────────
+# ── Horus Binary v1 packet format (22 bytes) ────────────────────────
 # Reference: https://github.com/projecthorus/horusdemodlib
 
-HORUS_V2_PAYLOAD_LEN = 32  # bytes
+HORUS_V1_PAYLOAD_LEN = 22
 
-def build_horus_v2_payload(
-    payload_id=256,
+def build_horus_v1_payload(
+    payload_id=1,
     sequence=0,
     hours=12, minutes=34, seconds=56,
     latitude=-34.9285,
@@ -48,52 +52,46 @@ def build_horus_v2_payload(
     speed=0,
     sats=10,
     temp=-20,
-    battery_mv=3700,
-    custom=None,
+    battery_10ths=37,
 ):
-    """Build a 32-byte Horus Binary v2 payload."""
-    payload = bytearray(32)
+    """Build a 22-byte Horus Binary v1 payload."""
+    payload = bytearray(22)
 
-    # Payload ID (2 bytes, little-endian)
-    struct.pack_into("<H", payload, 0, payload_id)
+    # Payload ID (uint8)
+    payload[0] = payload_id & 0xFF
 
-    # Sequence number (2 bytes)
-    struct.pack_into("<H", payload, 2, sequence & 0xFFFF)
+    # Sequence number (uint16, little-endian)
+    struct.pack_into("<H", payload, 1, sequence & 0xFFFF)
 
     # Time: hours (1), minutes (1), seconds (1)
-    payload[4] = hours
-    payload[5] = minutes
-    payload[6] = seconds
+    payload[3] = hours
+    payload[4] = minutes
+    payload[5] = seconds
 
     # Latitude (float32, little-endian)
-    struct.pack_into("<f", payload, 7, latitude)
+    struct.pack_into("<f", payload, 6, latitude)
 
     # Longitude (float32, little-endian)
-    struct.pack_into("<f", payload, 11, longitude)
+    struct.pack_into("<f", payload, 10, longitude)
 
     # Altitude (uint16, little-endian)
-    struct.pack_into("<H", payload, 15, min(altitude, 65535))
+    struct.pack_into("<H", payload, 14, min(altitude, 65535))
 
     # Speed (uint8)
-    payload[17] = min(speed, 255)
+    payload[16] = min(speed, 255)
 
     # Sats (uint8)
-    payload[18] = sats
+    payload[17] = sats
 
-    # Temp (int8, signed)
-    struct.pack_into("<b", payload, 19, max(-128, min(127, temp)))
+    # Temp (uint8, wraps for negative)
+    payload[18] = temp & 0xFF
 
-    # Battery (uint16 mV)
-    struct.pack_into("<H", payload, 20, battery_mv)
+    # Battery (uint8, tenths of volts e.g. 37 = 3.7V)
+    payload[19] = battery_10ths & 0xFF
 
-    # Custom fields (bytes 22-29) — zeros if not provided
-    if custom:
-        for i, b in enumerate(custom[:8]):
-            payload[22 + i] = b
-
-    # CRC16-CCITT over bytes 0..29 → bytes 30-31
-    crc = crc16_ccitt(payload[:30])
-    struct.pack_into("<H", payload, 30, crc)
+    # CRC16-CCITT over bytes 0..19 → bytes 20-21
+    crc = crc16_ccitt(payload[:20])
+    struct.pack_into("<H", payload, 20, crc)
 
     return bytes(payload)
 
@@ -182,12 +180,12 @@ def scramble(bits):
 
 # ── 4FSK Modulation ──────────────────────────────────────────────────
 
-# Horus Binary preamble and unique word
+# Horus Binary preamble and unique word (v1)
 PREAMBLE = [0, 1] * 16  # alternating 01 pattern, 32 bits (16 symbols)
-UNIQUE_WORD_V2 = [
-    0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1,
-    1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
-]
+UNIQUE_WORD_V1 = []
+for _uw_byte in [0x24, 0x91, 0x24, 0xF1]:
+    for _uw_bit in range(7, -1, -1):
+        UNIQUE_WORD_V1.append((_uw_byte >> _uw_bit) & 1)
 
 
 def bits_to_symbols(bits):
@@ -225,7 +223,7 @@ def generate_4fsk_audio(symbols, sample_rate=48000, symbol_rate=100,
 
 
 def encode_packet(payload):
-    """Full Horus Binary v2 encode: payload → 4FSK symbols.
+    """Full Horus Binary v1 encode: payload → 4FSK symbols.
 
     Uses horusdemodlib's official Encoder (C library) when available,
     falls back to the pure-Python implementation otherwise.
@@ -239,11 +237,11 @@ def encode_packet(payload):
     except ImportError:
         pass
 
-    # Fallback: pure-Python encoding
+    # Fallback: pure-Python encoding (v1 unique word)
     encoded_bits = golay_encode_bytes(payload)
     interleaved = interleave(encoded_bits)
     scrambled = scramble(interleaved)
-    frame_bits = PREAMBLE + UNIQUE_WORD_V2 + scrambled
+    frame_bits = PREAMBLE + UNIQUE_WORD_V1 + scrambled
     symbols = bits_to_symbols(frame_bits)
     return symbols
 
@@ -324,8 +322,8 @@ Examples:
                         help="IQ sample rate (default: 2000000)")
 
     # Payload fields
-    parser.add_argument("--payload-id", type=int, default=256,
-                        help="Horus payload ID (default: 256 = 4FSKTEST)")
+    parser.add_argument("--payload-id", type=int, default=1,
+                        help="Horus v1 payload ID 0-255 (default: 1)")
     parser.add_argument("--lat", type=float, default=-34.9285,
                         help="Latitude (default: -34.9285)")
     parser.add_argument("--lon", type=float, default=138.6007,
@@ -335,7 +333,7 @@ Examples:
 
     args = parser.parse_args()
 
-    print(f"Generating {args.packets} Horus Binary v2 packets...")
+    print(f"Generating {args.packets} Horus Binary v1 packets...")
     print(f"  Payload ID: {args.payload_id}")
     print(f"  Position:   {args.lat:.4f}, {args.lon:.4f}")
     print(f"  Altitude:   {args.alt} m")
@@ -348,49 +346,24 @@ Examples:
     # Leading silence (1 second)
     all_iq.extend(generate_silence_iq(1.0, args.iq_rate).tobytes())
 
-    # Use official encoder if available
-    _official_encoder = None
-    try:
-        from horusdemodlib.encoder import Encoder
-        _official_encoder = Encoder()
-        print("  Using horusdemodlib official encoder")
-    except ImportError:
-        print("  WARNING: horusdemodlib not installed, using fallback encoder")
-        print("  Install with: pip3 install horusdemodlib")
-
     for seq in range(args.packets):
         print(f"  Packet {seq + 1}/{args.packets} (seq={seq})")
 
         alt = args.alt + seq * 500
 
-        if _official_encoder:
-            payload = _official_encoder.create_horus_v2_packet(
-                payload_id=args.payload_id,
-                sequence_number=seq,
-                hours=12, minutes=34, seconds=56 + seq,
-                latitude=args.lat + seq * 0.001,
-                longitude=args.lon + seq * 0.001,
-                altitude=min(alt, 65535),
-                speed=5,
-                satellites=10,
-                temperature=-20 - seq,
-                battery_voltage=3.7,
-            )
-            symbols = _official_encoder.bytes_to_4fsk_symbols(payload)
-        else:
-            payload = build_horus_v2_payload(
-                payload_id=args.payload_id,
-                sequence=seq,
-                hours=12, minutes=34, seconds=56 + seq,
-                latitude=args.lat + seq * 0.001,
-                longitude=args.lon + seq * 0.001,
-                altitude=min(alt, 65535),
-                speed=5,
-                sats=10,
-                temp=-20 - seq,
-                battery_mv=3700,
-            )
-            symbols = encode_packet(payload)
+        payload = build_horus_v1_payload(
+            payload_id=args.payload_id,
+            sequence=seq,
+            hours=12, minutes=34, seconds=56 + seq,
+            latitude=args.lat + seq * 0.001,
+            longitude=args.lon + seq * 0.001,
+            altitude=min(alt, 65535),
+            speed=5,
+            sats=10,
+            temp=-20 - seq,
+            battery_10ths=37,
+        )
+        symbols = encode_packet(payload)
 
         audio = generate_4fsk_audio(symbols)
         iq = fm_modulate(audio, iq_rate=args.iq_rate)
@@ -436,8 +409,6 @@ Examples:
         except KeyboardInterrupt:
             print("\n  Stopped.")
 
-    if _official_encoder:
-        _official_encoder.close()
 
 
 if __name__ == "__main__":
