@@ -16,6 +16,19 @@ from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
 from horusdemodlib.utils import telem_to_sondehub
 
+# Fix horusdemodlib bug: Mode.BINARY_V2 incorrectly maps to V1's constant.
+# The C library has HORUS_MODE_BINARY_V2_256BIT=1 but Python enum uses 0.
+try:
+    import _horus_api_cffi
+    _v2_val = _horus_api_cffi.lib.HORUS_MODE_BINARY_V2_256BIT
+    if Mode.BINARY_V2.value != _v2_val:
+        Mode.BINARY_V2._value_ = _v2_val
+        Mode._value2member_map_[_v2_val] = Mode.BINARY_V2
+        logger = __import__("logging").getLogger(__name__)
+        logger.info("Patched Mode.BINARY_V2 to value %d", _v2_val)
+except Exception:
+    pass
+
 from owrx.config import Config
 
 try:
@@ -51,7 +64,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 HORUS_MODES = {
-    "horus_binary": Mode.BINARY,
+    "horus_binary": Mode.BINARY_V2,
     "horus_rtty": Mode.RTTY_7N2,
 }
 
