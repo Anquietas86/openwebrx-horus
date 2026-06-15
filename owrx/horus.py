@@ -164,23 +164,24 @@ class HorusDemodulator:
     4FSK/RTTY modem, and emits decoded telemetry dicts via callback.
     """
 
-    def __init__(self, mode_str: str = "horus_binary", callback=None):
+    def __init__(self, mode_str: str = "horus_binary", callback=None, sample_rate: int = None):
         self.mode_str = mode_str
         self.callback = callback
         self._lock = threading.Lock()
         self._dial_freq = None
         self._sample_count = 0
 
+        rate = sample_rate or HORUS_SAMPLE_RATE
         lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
         self._demod = HorusLib(
             mode=lib_mode,
-            sample_rate=HORUS_SAMPLE_RATE,
+            sample_rate=rate,
             stereo_iq=False,
             verbose=False,
             callback=self._on_frame,
         )
 
-        logger.info("Horus demodulator initialized: mode=%s (v1)", mode_str)
+        logger.info("Horus demodulator initialized: mode=%s rate=%d Hz", mode_str, rate)
 
     def _on_frame(self, frame: Frame):
         """HorusLib callback — fires for every frame with data."""

@@ -2,35 +2,83 @@
  * OpenWebRX+ Plugin: Horus Balloon Telemetry
  *
  * Displays decoded Horus Binary/RTTY telemetry in a dockable panel.
- * Listens for secondary_demod messages with mode === "Horus" and renders
- * them in a live scrolling table.
- *
- * Requires the utils plugin for server message event hooks.
+ * Uses two interception methods for maximum compatibility:
+ *   1. Hooks the global secondary_demod_push_data fallback
+ *   2. Adds a WebSocket message listener as a direct fallback
  */
 
 Plugins.horus = {
-    _version: "1.0.0",
+    _version: "1.2.0",
     _panel: null,
     _tbody: null,
     _maxRows: 200,
+    _seen: {},
 
     init: function() {
-        if (!Plugins.isLoaded("utils", "0.5")) {
-            console.warn("[horus] utils plugin >= 0.5 required");
-            return false;
-        }
-
         this._createPanel();
-        this._bindEvents();
+        this._hookFallback();
+        this._hookWebSocket();
 
         console.log("[horus] Plugin initialized v" + this._version);
         return true;
     },
 
+    _hookFallback: function() {
+        var self = this;
+        var origPush = window.secondary_demod_push_data;
+        window.secondary_demod_push_data = function(value) {
+            if (value && typeof value === "object" && value.mode === "Horus") {
+                console.log("[horus] Intercepted via fallback hook", value);
+                self._pushMessage(value);
+                return;
+            }
+            if (typeof origPush === "function") {
+                origPush.apply(this, arguments);
+            }
+        };
+        console.log("[horus] Fallback hook installed, origPush=" + typeof origPush);
+    },
+
+    _hookWebSocket: function() {
+        var self = this;
+
+        function attach(socket) {
+            socket.addEventListener("message", function(event) {
+                if (typeof event.data !== "string") return;
+                try {
+                    var json = JSON.parse(event.data);
+                    if (json.type === "secondary_demod" &&
+                        json.value && typeof json.value === "object" &&
+                        json.value.mode === "Horus") {
+                        var key = json.value.timestamp || Date.now();
+                        if (!self._seen[key]) {
+                            self._seen[key] = true;
+                            console.log("[horus] Intercepted via WebSocket listener", json.value);
+                            self._pushMessage(json.value);
+                            setTimeout(function() { delete self._seen[key]; }, 5000);
+                        }
+                    }
+                } catch(e) {}
+            });
+            console.log("[horus] WebSocket listener attached");
+        }
+
+        if (typeof ws !== "undefined" && ws) {
+            attach(ws);
+        }
+
+        var checkInterval = setInterval(function() {
+            if (typeof ws !== "undefined" && ws && ws.readyState === WebSocket.OPEN) {
+                clearInterval(checkInterval);
+                attach(ws);
+            }
+        }, 1000);
+        setTimeout(function() { clearInterval(checkInterval); }, 30000);
+    },
+
     _createPanel: function() {
         var container = document.getElementById("openwebrx-panels-container-left");
         if (!container) {
-            console.warn("[horus] Panel container not found, using fallback");
             container = document.body;
         }
 
@@ -70,17 +118,7 @@ Plugins.horus = {
         panel.querySelector(".horus-clear-btn").addEventListener("click", function() {
             self._tbody.innerHTML = "";
         });
-    },
-
-    _bindEvents: function() {
-        var self = this;
-
-        document.addEventListener("server:secondary_demod:before", function(e) {
-            var msg = e.detail;
-            if (msg && msg.value && msg.value.mode === "Horus") {
-                self._pushMessage(msg.value);
-            }
-        });
+        console.log("[horus] Panel created");
     },
 
     _pushMessage: function(msg) {

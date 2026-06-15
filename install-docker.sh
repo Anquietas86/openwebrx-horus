@@ -63,6 +63,9 @@ PLUGINS_PATH="${PLUGINS_PATH:-/opt/openwebrx/plugins}"
 # Python source path inside the container (Debian package layout)
 OWRX_PY="/usr/lib/python3/dist-packages"
 
+# Frontend plugin path: URL "static/plugins/receiver/..." maps to htdocs/plugins/receiver/
+OWRX_PLUGIN_DIR="$OWRX_PY/htdocs/plugins/receiver"
+
 # ── Validation ──────────────────────────────────────────────────────
 
 docker inspect "$CONTAINER" > /dev/null 2>&1 || error "Container '$CONTAINER' not found. Is it running?"
@@ -112,24 +115,22 @@ fi
 
 info "Installing frontend plugin..."
 
-mkdir -p "$PLUGINS_PATH/horus"
-cp "$SCRIPT_DIR/plugin/horus/horus.js"  "$PLUGINS_PATH/horus/"
-cp "$SCRIPT_DIR/plugin/horus/horus.css" "$PLUGINS_PATH/horus/"
-info "Copied plugin to $PLUGINS_PATH/horus/"
+# Copy plugin into the container's plugin directory
+docker exec "$CONTAINER" mkdir -p "$OWRX_PLUGIN_DIR/horus"
+docker cp "$SCRIPT_DIR/plugin/horus/horus.js"  "$CONTAINER:$OWRX_PLUGIN_DIR/horus/"
+docker cp "$SCRIPT_DIR/plugin/horus/horus.css" "$CONTAINER:$OWRX_PLUGIN_DIR/horus/"
+info "Copied plugin to $OWRX_PLUGIN_DIR/horus/ inside container"
 
 # Create or update init.js to load the horus plugin
-if [[ ! -f "$PLUGINS_PATH/init.js" ]]; then
-    cat > "$PLUGINS_PATH/init.js" << 'EOF'
-// OpenWebRX+ receiver plugins
-Plugins.load('horus');
-EOF
-    info "Created init.js with horus plugin"
-elif ! grep -q "'horus'" "$PLUGINS_PATH/init.js"; then
-    echo "Plugins.load('horus');" >> "$PLUGINS_PATH/init.js"
-    info "Added horus to existing init.js"
-else
-    info "init.js already loads horus, skipping"
-fi
+docker exec "$CONTAINER" bash -c "
+    INIT_JS='$OWRX_PLUGIN_DIR/init.js'
+    if [ ! -f \"\$INIT_JS\" ]; then
+        echo \"Plugins.load('horus');\" > \"\$INIT_JS\"
+    elif ! grep -q \"'horus'\" \"\$INIT_JS\"; then
+        echo \"Plugins.load('horus');\" >> \"\$INIT_JS\"
+    fi
+"
+info "init.js updated"
 
 # ── Install Step 2: horusdemodlib (inside container) ────────────────
 

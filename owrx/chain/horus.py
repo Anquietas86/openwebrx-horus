@@ -3,17 +3,18 @@ OpenWebRX DSP chain module for Horus balloon telemetry.
 
 Provides the demodulator chain that slots into OpenWebRX's service framework.
 Audio from csdr (NFM demod, 48 kHz, 16-bit signed) is piped into horusdemodlib's
-C modem, and decoded telemetry is emitted as JSON for the HorusParser.
+C modem, and decoded telemetry is emitted as pickled dicts for the websocket
+handler (matching the AudioChopperDemodulator pattern).
 """
 
 import array
-import json
 import logging
+import pickle
 import struct
 import threading
 from datetime import datetime, timezone
 
-from owrx.horus import HorusDemodulator, HORUS_SAMPLE_RATE
+from owrx.horus import HorusDemodulator, HorusParser, HORUS_SAMPLE_RATE
 
 try:
     from csdr.chain import Format
@@ -33,9 +34,10 @@ class HorusDemodulatorChain:
     """
     Demodulator chain that bridges OpenWebRX's audio pipeline to horusdemodlib.
 
-    Used as a secondary demodulator in the service framework. Receives raw
-    audio bytes from the selector/NFM stage, feeds them to the Horus modem,
-    and writes decoded JSON to the output writer.
+    Receives raw audio bytes from the selector/NFM stage, feeds them to the
+    Horus modem, and writes decoded telemetry as pickled dicts to the output
+    buffer. The OpenWebRX framework unpickles these and sends them as
+    secondary_demod websocket messages to the client.
     """
 
     def __init__(self, mode_str: str = "horus_binary"):
@@ -45,25 +47,37 @@ class HorusDemodulatorChain:
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
-
-        self._demod = HorusDemodulator(
-            mode_str=mode_str,
-            callback=self._on_decode,
-        )
+        self._band = None
+        self._sample_rate = None
+        self._demod = None
 
     def setDialFrequency(self, frequency: int):
         self._demod.setDialFrequency(frequency)
+        try:
+            from owrx.bands import Bandplan
+            self._band = Bandplan.getSharedInstance().findBand(frequency)
+        except Exception:
+            pass
 
     def _on_decode(self, telemetry: dict):
         """Called by HorusDemodulator when a valid frame is decoded."""
-        if self._writer and telemetry:
-            try:
-                out = self._format_for_frontend(telemetry)
-                msg = json.dumps(out).encode("utf-8") + b"\n"
-                logger.info("Horus writing decoded frame to output: %s", out.get("callsign", "???"))
-                self._writer.write(msg)
-            except Exception:
-                logger.exception("Failed to write decoded Horus telemetry")
+        if not self._writer or not telemetry:
+            return
+        try:
+            HorusParser.updateMap(telemetry, self._band)
+        except Exception:
+            logger.debug("Map update failed", exc_info=True)
+
+        try:
+            out = self._format_for_frontend(telemetry)
+            data = pickle.dumps(out)
+            logger.info(
+                "Horus writing decoded frame to output: %s (%d bytes pickled)",
+                telemetry.get("callsign", "???"), len(data),
+            )
+            self._writer.write(data)
+        except Exception:
+            logger.exception("Failed to write decoded Horus telemetry")
 
     @staticmethod
     def _format_for_frontend(data: dict) -> dict:
@@ -148,6 +162,8 @@ class HorusDemodulatorChain:
                         peak, rms, len(floats),
                     )
 
+                if not self._demod:
+                    continue
                 pcm = array.array("h", (
                     max(-32768, min(32767, int(s * 32767)))
                     for s in floats
@@ -172,10 +188,19 @@ class HorusDemodulatorChain:
             self._thread.join(timeout=2.0)
 
     def setSampleRate(self, rate):
+        self._sample_rate = rate
         logger.info("Horus chain setSampleRate: %d Hz", rate)
+        with self._lock:
+            if self._demod:
+                self._demod.close()
+            self._demod = HorusDemodulator(
+                mode_str=self.mode_str,
+                callback=self._on_decode,
+                sample_rate=rate,
+            )
 
     def getFixedAudioRate(self):
-        return HORUS_SAMPLE_RATE
+        return None
 
     def getInputFormat(self):
         if Format is not None:

@@ -48,13 +48,15 @@ services:
         cp /opt/openwebrx-horus/owrx/chain/horus.py /usr/lib/python3/dist-packages/owrx/chain/horus.py
         echo "[openwebrx-horus] Python modules copied"
 
-        # Copy frontend plugin (plugins dir is volume-mounted, so this persists)
-        mkdir -p /usr/lib/python3/dist-packages/htdocs/plugins/horus
-        cp /opt/openwebrx-horus/plugin/horus/horus.js /usr/lib/python3/dist-packages/htdocs/plugins/horus/
-        cp /opt/openwebrx-horus/plugin/horus/horus.css /usr/lib/python3/dist-packages/htdocs/plugins/horus/
+        # Copy frontend plugin to the correct OpenWebRX+ plugin path
+        # URL "static/plugins/receiver/..." maps to htdocs/plugins/receiver/...
+        PLUGIN_DIR="/usr/lib/python3/dist-packages/htdocs/plugins/receiver/horus"
+        mkdir -p "$$PLUGIN_DIR"
+        cp /opt/openwebrx-horus/plugin/horus/horus.js "$$PLUGIN_DIR/"
+        cp /opt/openwebrx-horus/plugin/horus/horus.css "$$PLUGIN_DIR/"
 
         # Ensure init.js loads the horus plugin
-        INIT_JS="/usr/lib/python3/dist-packages/htdocs/plugins/init.js"
+        INIT_JS="/usr/lib/python3/dist-packages/htdocs/plugins/receiver/init.js"
         if [ ! -f "$$INIT_JS" ]; then
           echo "Plugins.load('horus');" > "$$INIT_JS"
         elif ! grep -q "'horus'" "$$INIT_JS"; then
