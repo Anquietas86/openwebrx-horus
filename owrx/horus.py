@@ -16,19 +16,6 @@ from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
 from horusdemodlib.utils import telem_to_sondehub
 
-# Fix horusdemodlib bug: Mode.BINARY_V2 incorrectly maps to V1's constant.
-# The C library has HORUS_MODE_BINARY_V2_256BIT=1 but Python enum uses 0.
-try:
-    import _horus_api_cffi
-    _v2_val = _horus_api_cffi.lib.HORUS_MODE_BINARY_V2_256BIT
-    if Mode.BINARY_V2.value != _v2_val:
-        Mode.BINARY_V2._value_ = _v2_val
-        Mode._value2member_map_[_v2_val] = Mode.BINARY_V2
-        logger = __import__("logging").getLogger(__name__)
-        logger.info("Patched Mode.BINARY_V2 to value %d", _v2_val)
-except Exception:
-    pass
-
 from owrx.config import Config
 
 try:
@@ -64,9 +51,18 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 HORUS_MODES = {
-    "horus_binary": Mode.BINARY_V2,
+    "horus_binary": Mode.BINARY,
     "horus_rtty": Mode.RTTY_7N2,
 }
+
+# horusdemodlib bug: Mode.BINARY_V2 maps to V1's C constant (0).
+# The actual v2 mode value in the C library is 1.
+_HORUS_V2_MODE = None
+try:
+    import _horus_api_cffi
+    _HORUS_V2_MODE = _horus_api_cffi.lib.HORUS_MODE_BINARY_V2_256BIT
+except Exception:
+    pass
 
 HORUS_SAMPLE_RATE = 48000
 
@@ -189,7 +185,19 @@ class HorusDemodulator:
             stereo_iq=False,
             verbose=False,
         )
-        logger.info("Horus demodulator initialized: mode=%s", mode_str)
+
+        if mode_str == "horus_binary" and _HORUS_V2_MODE is not None:
+            api = _horus_api_cffi.lib
+            api.horus_close(self._demod.hstates)
+            self._demod.hstates = api.horus_open_advanced(
+                _HORUS_V2_MODE, -1, -1
+            )
+            self._demod.max_demod_in = api.horus_get_max_demod_in(self._demod.hstates)
+            self._demod.max_ascii_out = api.horus_get_max_ascii_out_len(self._demod.hstates)
+            self._demod.mfsk = api.horus_get_mFSK(self._demod.hstates)
+            logger.info("Horus demodulator initialized: mode=%s (v2, C mode=%d)", mode_str, _HORUS_V2_MODE)
+        else:
+            logger.info("Horus demodulator initialized: mode=%s", mode_str)
 
     def setDialFrequency(self, frequency: int):
         self._dial_freq = frequency
