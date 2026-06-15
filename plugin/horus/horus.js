@@ -187,6 +187,19 @@ Plugins.horus = {
         }
     },
 
+    _showPanel: function() {
+        var el = document.getElementById("openwebrx-panel-horus-message");
+        if (el && el.style.display === "none") {
+            // Strip framework panel classes that collapse height to 0,
+            // then apply our own layout styles
+            el.className = "";
+            el.style.cssText = "display:block; max-height:300px; overflow-y:auto; flex-shrink:0; width:619px; margin-top:4px;";
+            // Also hide the empty digimodes grey box
+            var digi = document.getElementById("openwebrx-panel-digimodes");
+            if (digi) digi.style.display = "none";
+        }
+    },
+
     _hookRouting: function() {
         var self = this;
 
@@ -194,6 +207,7 @@ Plugins.horus = {
         var origPush = window.secondary_demod_push_data;
         window.secondary_demod_push_data = function(value) {
             if (self._panel && self._panel.supportsMessage(value)) {
+                self._showPanel();
                 self._panel.pushMessage(value);
                 return;
             }
