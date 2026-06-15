@@ -184,18 +184,51 @@ def patch_service(content):
 
 
 def patch_dsp(content):
-    """Extend ModulationValidator regex to allow underscores in mode names."""
+    """Patch dsp.py: fix validator regex + add Horus to _getSecondaryDemodulator."""
     m = MARKER
 
-    # The default regex is ^[a-z0-9\\-]+$ which rejects underscores.
-    # Our modes use underscores (horus_binary, horus_rtty).
+    # 1. Extend ModulationValidator regex to allow underscores
     old = r'"^[a-z0-9\\-]+$"'
     new = r'"^[a-z0-9_\\-]+$"'
-
     if old in content:
         content = content.replace(old, new, 1)
 
-    return content
+    # 2. Add Horus demodulators to _getSecondaryDemodulator()
+    #    Insert before the end of the elif chain (before setSecondaryDemodulator method)
+    lines = content.split("\n")
+    insert_idx = None
+    indent = ""
+    for i, line in enumerate(lines):
+        if "def setSecondaryDemodulator(self, mod):" in line:
+            insert_idx = i
+            break
+
+    if insert_idx is not None:
+        # Walk back to find the indentation of the elif blocks
+        for j in range(insert_idx - 1, -1, -1):
+            stripped = lines[j].strip()
+            if stripped.startswith("elif mod ==") or stripped.startswith("return "):
+                indent = lines[j][: len(lines[j]) - len(lines[j].lstrip())]
+                if stripped.startswith("return "):
+                    # Use the elif indent (one level less)
+                    indent = indent[:-4] if indent.endswith("    ") else indent
+                break
+
+        demod_block = [
+            indent + m + " BEGIN",
+            indent + 'elif mod == "horus_binary":',
+            indent + "    from owrx.chain.horus import HorusDemodulatorChain",
+            indent + "    return HorusDemodulatorChain(mode_str=\"horus_binary\")",
+            indent + 'elif mod == "horus_rtty":',
+            indent + "    from owrx.chain.horus import HorusDemodulatorChain",
+            indent + "    return HorusDemodulatorChain(mode_str=\"horus_rtty\")",
+            indent + m + " END",
+            "",
+        ]
+        for j, dl in enumerate(demod_block):
+            lines.insert(insert_idx + j, dl)
+
+    return "\n".join(lines)
 
 
 def main():

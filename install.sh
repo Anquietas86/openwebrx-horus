@@ -376,16 +376,55 @@ PYEOF
     info "Patched openwebrx.js"
 fi
 
-# ── Install: patch dsp.py (allow underscores in mode names) ────────
+# ── Install: patch dsp.py ──────────────────────────────────────────
 
 DSP_FILE="$OWRX/owrx/dsp.py"
 
-if grep -q 'a-z0-9_' "$DSP_FILE"; then
+if grep -q 'horus_binary' "$DSP_FILE"; then
     info "dsp.py already patched, skipping"
 else
     backup "$DSP_FILE"
-    sed -i 's/\^[a-z0-9\\\\-]/^[a-z0-9_\\\\-]/' "$DSP_FILE"
-    info "Patched dsp.py (ModulationValidator regex)"
+
+    python3 - "$DSP_FILE" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+marker = "# openwebrx-horus"
+
+with open(path, 'r') as f:
+    content = f.read()
+
+# 1. Fix ModulationValidator regex to allow underscores
+content = content.replace('"^[a-z0-9\\\\-]+$"', '"^[a-z0-9_\\\\-]+$"', 1)
+
+# 2. Add Horus to _getSecondaryDemodulator() — before setSecondaryDemodulator method
+lines = content.split('\n')
+insert_idx = None
+indent = "        "
+for i, line in enumerate(lines):
+    if 'def setSecondaryDemodulator(self, mod):' in line:
+        insert_idx = i
+        break
+
+if insert_idx is not None:
+    block = [
+        indent + marker + " BEGIN",
+        indent + 'elif mod == "horus_binary":',
+        indent + '    from owrx.chain.horus import HorusDemodulatorChain',
+        indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
+        indent + 'elif mod == "horus_rtty":',
+        indent + '    from owrx.chain.horus import HorusDemodulatorChain',
+        indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+        indent + marker + " END",
+        "",
+    ]
+    for j, dl in enumerate(block):
+        lines.insert(insert_idx + j, dl)
+
+with open(path, 'w') as f:
+    f.write('\n'.join(lines))
+PYEOF
+    info "Patched dsp.py"
 fi
 
 # ── Done ────────────────────────────────────────────────────────────
