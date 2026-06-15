@@ -42,12 +42,7 @@ class HorusDemodulatorChain:
     secondary_demod websocket messages to the client.
     """
 
-    DUMP_AUDIO = True
-    DUMP_SECONDS = 15
-    DUMP_PATH_12K = "/tmp/horus_audio_12k.raw"
-    DUMP_PATH_48K = "/tmp/horus_audio_48k.raw"
-
-    TEST_INJECT = True
+    TEST_INJECT = False
 
     def __init__(self, mode_str: str = "horus_binary"):
         self.mode_str = mode_str
@@ -60,9 +55,6 @@ class HorusDemodulatorChain:
         self._sample_rate = None
         self._demod = None
         self._invert_spectrum = False
-        self._dump_12k = None
-        self._dump_48k = None
-        self._dump_samples = 0
 
     def setDialFrequency(self, frequency: int):
         self._demod.setDialFrequency(frequency)
@@ -194,9 +186,7 @@ class HorusDemodulatorChain:
             return
 
         bytes_total = 0
-        samples_total = 0
         read_count = 0
-        t_start = time.monotonic()
         resample_state = None
 
         while self._running:
@@ -211,22 +201,11 @@ class HorusDemodulatorChain:
                     data = bytes(data)
                 n_floats = len(data) // 4
                 floats = list(struct.unpack_from("<%df" % n_floats, data))
-                samples_total += n_floats
 
                 if read_count == 1:
                     logger.info(
                         "Horus first audio read: %d bytes (%d float32 samples)",
                         len(data), n_floats,
-                    )
-                elif read_count % 500 == 0:
-                    elapsed = time.monotonic() - t_start
-                    measured = samples_total / elapsed if elapsed > 0 else 0
-                    logger.info(
-                        "Horus audio stats: %d reads, %.1f KB, "
-                        "configured_rate=%d measured_throughput=%.0f Hz "
-                        "resample_ratio=%.3f",
-                        read_count, bytes_total / 1024,
-                        src_rate, measured, ratio,
                     )
 
                 if not self._demod:
@@ -235,40 +214,12 @@ class HorusDemodulatorChain:
                 if self._invert_spectrum:
                     floats = [-s for s in floats]
 
-                # Diagnostic audio dump
-                if self.DUMP_AUDIO and self._dump_samples < self.DUMP_SECONDS * src_rate:
-                    if self._dump_12k is None:
-                        self._dump_12k = open(self.DUMP_PATH_12K, "wb")
-                        self._dump_48k = open(self.DUMP_PATH_48K, "wb")
-                        logger.info("Horus audio dump started: %s, %s",
-                                    self.DUMP_PATH_12K, self.DUMP_PATH_48K)
-                    self._dump_12k.write(struct.pack("<%df" % len(floats), *floats))
-                    self._dump_samples += len(floats)
-                elif self._dump_12k is not None:
-                    self._dump_12k.close()
-                    self._dump_12k = None
-                    logger.info("Horus 12k audio dump complete: %d samples (%.1fs)",
-                                self._dump_samples, self._dump_samples / src_rate)
-
                 resampled, resample_state = self._resample_continuous(
                     floats, src_rate, HORUS_SAMPLE_RATE, resample_state
                 )
 
-                # Dump resampled audio
-                if self.DUMP_AUDIO and self._dump_48k is not None and not self._dump_48k.closed:
-                    self._dump_48k.write(struct.pack("<%df" % len(resampled), *resampled))
-
                 peak = max((abs(s) for s in resampled), default=0.0)
-                if peak > 1e-6:
-                    scale = 30000.0 / peak
-                else:
-                    scale = 32767.0
-                if read_count <= 3:
-                    logger.info(
-                        "Horus int16 scaling: peak=%.6f scale=%.1f "
-                        "in=%d out=%d samples",
-                        peak, scale, len(floats), len(resampled),
-                    )
+                scale = 30000.0 / peak if peak > 1e-6 else 32767.0
                 pcm = array.array("h", (
                     max(-32768, min(32767, int(s * scale)))
                     for s in resampled

@@ -177,7 +177,7 @@ class HorusDemodulator:
             mode=lib_mode,
             sample_rate=rate,
             stereo_iq=False,
-            verbose=True,
+            verbose=False,
             callback=self._on_frame,
         )
 
@@ -193,12 +193,6 @@ class HorusDemodulator:
     def process(self, audio_bytes: bytes):
         """Feed 16-bit signed PCM audio. Decoded frames arrive via callback."""
         self._sample_count += len(audio_bytes) // 2
-        if self._sample_count <= len(audio_bytes) // 2:
-            logger.info(
-                "Horus modem receiving audio: %d bytes (%d int16 samples)",
-                len(audio_bytes), len(audio_bytes) // 2,
-            )
-
         with self._lock:
             self._demod.add_samples(audio_bytes)
 

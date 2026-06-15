@@ -1,31 +1,22 @@
 # Add to owrx/modes.py
 #
-# 1. Import at top of file (with other mode imports):
-#
-#    from owrx.chain.horus import HorusDemodulatorChain
-#
-# 2. Add these mode entries to the Modes.mappings list,
-#    alongside the existing sonde/packet/ais entries:
-
-# --- Horus Binary (4FSK) ---
-# Bandwidth: Horus 4FSK uses ~10 kHz occupied bandwidth at 100 baud.
-# The mode is presented as a digital mode underlying NFM demodulation.
+# Add these mode entries to the Modes.mappings list,
+# alongside the existing sonde/packet/ais entries:
 
 DigitalMode(
     modulation="horus_binary",
     name="Horus Binary",
-    underlying="nfm",
-    bandpass=Bandpass(-4000, 4000),
-    ifRate=48000,
+    underlying=["usb"],
+    bandpass=Bandpass(100, 4000),
     requirements=["horusdemodlib"],
     service=True,
+    squelch=False,
 ),
 DigitalMode(
     modulation="horus_rtty",
     name="Horus RTTY",
-    underlying="usb",
+    underlying=["usb"],
     bandpass=Bandpass(300, 3000),
-    ifRate=48000,
     requirements=["horusdemodlib"],
     service=True,
 ),
