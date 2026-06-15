@@ -16,16 +16,37 @@ from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
 from horusdemodlib.utils import telem_to_sondehub
 
-from owrx.map import Map, LatLngLocation
-from owrx.metrics import Metrics, CounterMetric
-from owrx.reporting import ReportingEngine
-from owrx.bandplan import Bandplan
 from owrx.config import Config
 
 try:
     from owrx.toolbox import TextParser
 except ImportError:
     from owrx.parser import TextParser
+
+try:
+    from owrx.map import Map, LatLngLocation
+except ImportError:
+    Map = None
+    LatLngLocation = None
+
+try:
+    from owrx.metrics import Metrics, CounterMetric
+except ImportError:
+    Metrics = None
+    CounterMetric = None
+
+try:
+    from owrx.reporting import ReportingEngine
+except ImportError:
+    ReportingEngine = None
+
+try:
+    from owrx.bands import Bandplan
+except ImportError:
+    try:
+        from owrx.bandplan import Bandplan
+    except ImportError:
+        Bandplan = None
 
 logger = logging.getLogger(__name__)
 
@@ -230,10 +251,13 @@ class HorusParser(TextParser):
         self.metric = None
 
     def setDialFrequency(self, frequency: int):
-        self.band = Bandplan.getSharedInstance().findBand(frequency)
+        if Bandplan is not None:
+            self.band = Bandplan.getSharedInstance().findBand(frequency)
         self._update_metric()
 
     def _update_metric(self):
+        if Metrics is None or CounterMetric is None:
+            return
         band_name = self.band.getName() if self.band else "unknown"
         metric_name = "owrx.horus.decodes.{band}".format(band=band_name)
         metrics = Metrics.getSharedInstance()
@@ -259,7 +283,8 @@ class HorusParser(TextParser):
 
         out = self._build_output(data)
 
-        ReportingEngine.getSharedInstance().spot(out)
+        if ReportingEngine is not None:
+            ReportingEngine.getSharedInstance().spot(out)
 
         if self.service:
             return None
@@ -314,6 +339,7 @@ class HorusParser(TextParser):
         loc = HorusLocation(data)
         source = "horus"
 
-        Map.getSharedInstance().updateLocation(
-            callsign, loc, source, timestamp=timestamp, band=band
-        )
+        if Map is not None:
+            Map.getSharedInstance().updateLocation(
+                callsign, loc, source, timestamp=timestamp, band=band
+            )
