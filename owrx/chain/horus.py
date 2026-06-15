@@ -150,8 +150,10 @@ class HorusDemodulatorChain:
 
                 if read_count == 1:
                     logger.info(
-                        "Horus first audio read: %d bytes (%d float32 samples, type=%s)",
+                        "Horus first audio read: %d bytes (%d float32 samples, type=%s, "
+                        "bytes_per_sample=%.1f)",
                         len(data), n_floats, type(data).__name__,
+                        len(data) / max(n_floats, 1),
                     )
                 elif read_count % 500 == 0:
                     elapsed = time.monotonic() - t_start
@@ -214,7 +216,7 @@ class HorusDemodulatorChain:
 
     def getInputFormat(self):
         if Format is not None:
-            return Format.SHORT
+            return Format.FLOAT
         return None
 
     def isSecondaryDemodulator(self):
