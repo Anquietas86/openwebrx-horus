@@ -355,7 +355,7 @@ Examples:
         payload = build_horus_v1_payload(
             payload_id=args.payload_id,
             sequence=seq,
-            hours=12, minutes=34, seconds=56 + seq,
+            hours=12, minutes=34 + (seq // 60), seconds=seq % 60,
             latitude=args.lat + seq * 0.001,
             longitude=args.lon + seq * 0.001,
             altitude=min(alt, 65535),

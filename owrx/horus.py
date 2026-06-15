@@ -211,7 +211,11 @@ class HorusDemodulator:
         try:
             telemetry = decode_packet(frame.data)
         except Exception:
-            logger.exception("Failed to decode Horus packet")
+            logger.warning(
+                "Horus CRC OK but decode_packet failed (raw: %s)",
+                frame.data.hex() if isinstance(frame.data, bytes) else frame.data,
+                exc_info=True,
+            )
             return None
 
         telemetry["snr"] = frame.snr
