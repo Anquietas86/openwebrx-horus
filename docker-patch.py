@@ -183,6 +183,21 @@ def patch_service(content):
     return "\n".join(lines)
 
 
+def patch_dsp(content):
+    """Extend ModulationValidator regex to allow underscores in mode names."""
+    m = MARKER
+
+    # The default regex is ^[a-z0-9\\-]+$ which rejects underscores.
+    # Our modes use underscores (horus_binary, horus_rtty).
+    old = r'"^[a-z0-9\\-]+$"'
+    new = r'"^[a-z0-9_\\-]+$"'
+
+    if old in content:
+        content = content.replace(old, new, 1)
+
+    return content
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 docker-patch.py <owrx_python_path>")
@@ -205,6 +220,11 @@ def main():
     patch_file(
         os.path.join(base, "owrx", "service", "__init__.py"),
         patch_service,
+    )
+
+    patch_file(
+        os.path.join(base, "owrx", "dsp.py"),
+        patch_dsp,
     )
 
     print("[openwebrx-horus] Patching complete.")

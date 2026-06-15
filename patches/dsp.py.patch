@@ -1,0 +1,10 @@
+# Patch owrx/dsp.py
+#
+# The ModulationValidator regex only allows [a-z0-9\-] in mode names.
+# Our modes use underscores (horus_binary, horus_rtty), so we need to
+# add underscore to the allowed characters.
+#
+# In class ModulationValidator, change:
+#   RegexValidator(re.compile("^[a-z0-9\\-]+$"))
+# To:
+#   RegexValidator(re.compile("^[a-z0-9_\\-]+$"))

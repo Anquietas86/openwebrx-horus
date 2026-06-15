@@ -376,6 +376,18 @@ PYEOF
     info "Patched openwebrx.js"
 fi
 
+# ── Install: patch dsp.py (allow underscores in mode names) ────────
+
+DSP_FILE="$OWRX/owrx/dsp.py"
+
+if grep -q 'a-z0-9_' "$DSP_FILE"; then
+    info "dsp.py already patched, skipping"
+else
+    backup "$DSP_FILE"
+    sed -i 's/\^[a-z0-9\\\\-]/^[a-z0-9_\\\\-]/' "$DSP_FILE"
+    info "Patched dsp.py (ModulationValidator regex)"
+fi
+
 # ── Done ────────────────────────────────────────────────────────────
 
 echo ""
