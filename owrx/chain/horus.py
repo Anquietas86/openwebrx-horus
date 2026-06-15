@@ -12,6 +12,7 @@ import logging
 import pickle
 import struct
 import threading
+import time
 from datetime import datetime, timezone
 
 from owrx.horus import HorusDemodulator, HorusParser, HORUS_SAMPLE_RATE
@@ -126,9 +127,12 @@ class HorusDemodulatorChain:
         self._thread.start()
 
     def _run(self):
-        logger.info("Horus demod chain started: mode=%s", self.mode_str)
+        logger.info("Horus demod chain started: mode=%s sample_rate=%s",
+                     self.mode_str, self._sample_rate)
         bytes_total = 0
+        samples_total = 0
         read_count = 0
+        t_start = time.monotonic()
 
         while self._running:
             try:
@@ -138,22 +142,28 @@ class HorusDemodulatorChain:
                     break
                 bytes_total += len(data)
                 read_count += 1
-                if read_count == 1:
-                    logger.info(
-                        "Horus first audio read: %d bytes (type=%s)",
-                        len(data), type(data).__name__,
-                    )
-                elif read_count % 500 == 0:
-                    logger.info(
-                        "Horus audio stats: %d reads, %.1f KB total",
-                        read_count, bytes_total / 1024,
-                    )
                 if isinstance(data, memoryview):
                     data = bytes(data)
                 n_floats = len(data) // 4
                 floats = struct.unpack_from("<%df" % n_floats, data)
+                samples_total += n_floats
 
-                if read_count <= 5 or read_count % 500 == 0:
+                if read_count == 1:
+                    logger.info(
+                        "Horus first audio read: %d bytes (%d float32 samples, type=%s)",
+                        len(data), n_floats, type(data).__name__,
+                    )
+                elif read_count % 500 == 0:
+                    elapsed = time.monotonic() - t_start
+                    measured_rate = samples_total / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        "Horus audio stats: %d reads, %.1f KB, "
+                        "configured_rate=%s measured_rate=%.0f Hz",
+                        read_count, bytes_total / 1024,
+                        self._sample_rate, measured_rate,
+                    )
+
+                if read_count <= 3 or read_count % 500 == 0:
                     abs_vals = [abs(s) for s in floats]
                     peak = max(abs_vals) if abs_vals else 0
                     rms = (sum(s * s for s in floats) / max(len(floats), 1)) ** 0.5
@@ -200,7 +210,7 @@ class HorusDemodulatorChain:
             )
 
     def getFixedAudioRate(self):
-        return HORUS_SAMPLE_RATE
+        return None
 
     def getInputFormat(self):
         if Format is not None:
@@ -217,7 +227,5 @@ class HorusDemodulatorChain:
         return False
 
 
-if FixedAudioRateChain is not None:
-    FixedAudioRateChain.register(HorusDemodulatorChain)
 if SecondaryDemodulator is not None:
     SecondaryDemodulator.register(HorusDemodulatorChain)
