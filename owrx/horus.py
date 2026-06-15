@@ -18,10 +18,14 @@ from horusdemodlib.utils import telem_to_sondehub
 
 from owrx.map import Map, LatLngLocation
 from owrx.metrics import Metrics, CounterMetric
-from owrx.parser import TextParser
 from owrx.reporting import ReportingEngine
 from owrx.bandplan import Bandplan
 from owrx.config import Config
+
+try:
+    from owrx.toolbox import TextParser
+except ImportError:
+    from owrx.parser import TextParser
 
 logger = logging.getLogger(__name__)
 
