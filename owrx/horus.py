@@ -183,10 +183,22 @@ class HorusDemodulator:
 
     def process(self, audio_bytes: bytes):
         """Feed 16-bit signed PCM audio. Calls back with decoded telemetry."""
+        self._sample_count = getattr(self, "_sample_count", 0) + len(audio_bytes) // 2
+        if self._sample_count <= len(audio_bytes) // 2:
+            logger.info(
+                "Horus modem receiving audio: %d bytes (%d int16 samples)",
+                len(audio_bytes), len(audio_bytes) // 2,
+            )
+
         with self._lock:
             frame = self._demod.add_samples(audio_bytes)
 
         if frame is None:
+            if self._sample_count % (HORUS_SAMPLE_RATE * 10) < len(audio_bytes) // 2:
+                logger.debug(
+                    "Horus modem: %d samples fed (%.1fs), no frame yet",
+                    self._sample_count, self._sample_count / HORUS_SAMPLE_RATE,
+                )
             return None
 
         return self._handle_frame(frame)

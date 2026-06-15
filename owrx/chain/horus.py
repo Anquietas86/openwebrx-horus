@@ -94,6 +94,8 @@ class HorusDemodulatorChain:
                         "Horus audio stats: %d reads, %.1f KB total",
                         read_count, bytes_total / 1024,
                     )
+                if isinstance(data, memoryview):
+                    data = bytes(data)
                 self._demod.process(data)
             except Exception:
                 if self._running:
