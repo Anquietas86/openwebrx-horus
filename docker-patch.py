@@ -117,7 +117,7 @@ def patch_modes(content):
         '            modulation="horus_binary",\n'
         '            name="Horus Binary",\n'
         '            underlying=["nfm"],\n'
-        "            bandpass=Bandpass(-4000, 4000),\n"
+        "            bandpass=Bandpass(-6000, 6000),\n"
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
         "            squelch=False,\n"

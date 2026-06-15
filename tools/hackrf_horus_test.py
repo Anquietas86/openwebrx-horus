@@ -249,7 +249,7 @@ def encode_packet(payload):
 
 # ── FM modulation to IQ ──────────────────────────────────────────────
 
-def fm_modulate(audio, audio_rate=48000, iq_rate=2_000_000, deviation=3000):
+def fm_modulate(audio, audio_rate=48000, iq_rate=2_000_000, deviation=2000):
     """FM-modulate baseband audio into IQ samples for HackRF."""
     # Resample audio to IQ rate
     duration = len(audio) / audio_rate

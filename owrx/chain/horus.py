@@ -176,8 +176,22 @@ class HorusDemodulatorChain:
 
                 if not self._demod:
                     continue
+                # Normalize amplitude to maximise modem SNR — FSK carries
+                # information in frequency, not amplitude.
+                peak = max((abs(s) for s in floats), default=0.0)
+                if peak > 1e-6:
+                    scale = 30000.0 / peak
+                else:
+                    scale = 32767.0
+                if read_count <= 3:
+                    logger.info(
+                        "Horus int16 scaling: peak=%.6f scale=%.1f "
+                        "(effective range ±%d)",
+                        peak, scale,
+                        min(32767, int(peak * scale)),
+                    )
                 pcm = array.array("h", (
-                    max(-32768, min(32767, int(s * 32767)))
+                    max(-32768, min(32767, int(s * scale)))
                     for s in floats
                 ))
                 self._demod.process(pcm.tobytes())
