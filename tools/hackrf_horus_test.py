@@ -225,25 +225,26 @@ def generate_4fsk_audio(symbols, sample_rate=48000, symbol_rate=100,
 def encode_packet(payload):
     """Full Horus Binary v1 encode: payload → 4FSK symbols.
 
-    Uses horusdemodlib's official Encoder (C library) when available,
-    falls back to the pure-Python implementation otherwise.
+    Uses horusdemodlib's official Encoder for L2 encoding (Golay FEC +
+    interleave + scramble), then bytes_to_4fsk_symbols to add preamble,
+    unique word, and convert to symbol indices.
+
+    Requires horusdemodlib installed (pip install horusdemodlib).
     """
     try:
         from horusdemodlib.encoder import Encoder
         enc = Encoder()
-        symbols = enc.bytes_to_4fsk_symbols(payload)
+        encoded, _ = enc.horus_l2_encode_packet(payload)
+        symbols = enc.bytes_to_4fsk_symbols(encoded)
         enc.close()
         return list(symbols)
     except ImportError:
         pass
 
-    # Fallback: pure-Python encoding (v1 unique word)
-    encoded_bits = golay_encode_bytes(payload)
-    interleaved = interleave(encoded_bits)
-    scrambled = scramble(interleaved)
-    frame_bits = PREAMBLE + UNIQUE_WORD_V1 + scrambled
-    symbols = bits_to_symbols(frame_bits)
-    return symbols
+    raise RuntimeError(
+        "horusdemodlib is required for encoding. "
+        "Install with: pip install horusdemodlib"
+    )
 
 
 # ── FM modulation to IQ ──────────────────────────────────────────────
