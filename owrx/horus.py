@@ -177,7 +177,7 @@ class HorusDemodulator:
             mode=lib_mode,
             sample_rate=rate,
             stereo_iq=False,
-            verbose=False,
+            verbose=True,
             callback=self._on_frame,
         )
 

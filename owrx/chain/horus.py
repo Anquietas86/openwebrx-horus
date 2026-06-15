@@ -200,7 +200,7 @@ class HorusDemodulatorChain:
             )
 
     def getFixedAudioRate(self):
-        return None
+        return HORUS_SAMPLE_RATE
 
     def getInputFormat(self):
         if Format is not None:
