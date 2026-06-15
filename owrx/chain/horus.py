@@ -12,6 +12,11 @@ import threading
 
 from owrx.horus import HorusDemodulator, HORUS_SAMPLE_RATE
 
+try:
+    from csdr.chain import Format
+except ImportError:
+    Format = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,11 +96,22 @@ class HorusDemodulatorChain:
         if self._thread:
             self._thread.join(timeout=2.0)
 
+    def setSampleRate(self, rate):
+        pass
+
     def getFixedAudioRate(self):
         return HORUS_SAMPLE_RATE
 
+    def getInputFormat(self):
+        if Format is not None:
+            return Format.SHORT
+        return None
+
     def isSecondaryDemodulator(self):
         return True
+
+    def isSecondaryFftShown(self):
+        return False
 
     def supportsSquelch(self):
         return False
