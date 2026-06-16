@@ -38,20 +38,23 @@ class TestHorusDecoder(unittest.TestCase):
     """Test packet decoding against known-good test vectors."""
 
     def test_decode_v2_packet(self):
+        """Decode a real Horus v2 packet using the loopback test payload."""
         from horusdemodlib.decoder import decode_packet
 
-        # Known v2 32-byte test vector from horusdemodlib test suite
-        # (If this fails, horusdemodlib test data format may have changed)
-        try:
-            test_hex = "0102030405060708091011121314151617181920212223242526272829303132"
-            test_bytes = bytes.fromhex(test_hex)
-            result = decode_packet(test_bytes)
-            # We just check it returns a dict and doesn't crash
-            if result is not None:
-                self.assertIsInstance(result, dict)
-        except Exception:
-            # Packet won't decode with random data, that's expected
-            pass
+        # Real v2 payload from loopback_test.py: payload_id=1, seq=42,
+        # time=12:34:56, lat=-34.9285, lon=138.6007, alt=25000m,
+        # speed=5, sats=10, temp=236 (raw), battery=37 (raw)
+        test_hex = "012a000c2238c9b60bc2c7990a43a861050aec25a402"
+        test_bytes = bytes.fromhex(test_hex)
+        result = decode_packet(test_bytes)
+        self.assertIsInstance(result, dict)
+        # payload_id=1 resolves to "HORUSBINARY" in horusdemodlib's lookup
+        self.assertEqual(result.get("callsign"), "HORUSBINARY")
+        self.assertEqual(result.get("sequence_number"), 42)
+        self.assertAlmostEqual(result.get("latitude", 0), -34.9285, places=3)
+        self.assertAlmostEqual(result.get("longitude", 0), 138.6007, places=3)
+        self.assertEqual(result.get("altitude"), 25000)
+        self.assertTrue(result.get("crc_ok"))
 
     def test_output_format(self):
         """Verify our parser produces the expected output structure."""
@@ -68,10 +71,9 @@ class TestHorusDecoder(unittest.TestCase):
             "battery": 3.7,
         }
 
-        from owrx.horus import HorusParser
+        from owrx.horus import format_horus_telemetry
 
-        parser = HorusParser.__new__(HorusParser)
-        out = parser._build_output(mock_data)
+        out = format_horus_telemetry(mock_data)
 
         self.assertEqual(out["mode"], "Horus")
         self.assertEqual(out["callsign"], "VK5ARG")
@@ -97,10 +99,9 @@ class TestHorusDecoder(unittest.TestCase):
             "solar_v": 4.12,
         }
 
-        from owrx.horus import HorusParser
+        from owrx.horus import format_horus_telemetry
 
-        parser = HorusParser.__new__(HorusParser)
-        out = parser._build_output(mock_data)
+        out = format_horus_telemetry(mock_data)
 
         self.assertEqual(out["ext_temp"], -42.5)
         self.assertEqual(out["solar_v"], 4.12)

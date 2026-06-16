@@ -51,8 +51,11 @@ def patch_file(path, patch_func):
 
     content = patch_func(content)
 
-    with open(path, "w") as f:
+    # Atomic write: write to temp file, then replace
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
         f.write(content)
+    os.replace(tmp_path, path)
 
     print(f"  DONE {os.path.relpath(path)}")
     return True
@@ -186,9 +189,10 @@ def patch_dsp(content):
     """Patch dsp.py: fix validator regex + add Horus to _getSecondaryDemodulator."""
     m = MARKER
 
-    # 1. Extend ModulationValidator regex to allow underscores
-    old = r'"^[a-z0-9\\-]+$"'
-    new = r'"^[a-z0-9_\\-]+$"'
+    # 1. Fix ModulationValidator regex to allow underscores for horus modulations
+    #    Only add underscore to the character class (minimal change)
+    old = r'"^[a-z0-9\-]+$"'
+    new = r'"^[a-z0-9_\-]+$"'
     if old in content:
         content = content.replace(old, new, 1)
 
@@ -230,6 +234,23 @@ def patch_dsp(content):
     return "\n".join(lines)
 
 
+def patch_openwebrx_js(content):
+    """Add 'horus' to the secondary_demod panel ID list in openwebrx.js."""
+    m = MARKER
+
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "'meshtastic'" in stripped and stripped.endswith("].map("):
+            new_line = line.replace("'meshtastic']", "'meshtastic', 'horus']")
+            lines[i] = m + " BEGIN"
+            lines.insert(i + 1, new_line)
+            lines.insert(i + 2, m + " END")
+            break
+
+    return "\n".join(lines)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 docker-patch.py <owrx_python_path>")
@@ -257,6 +278,12 @@ def main():
     patch_file(
         os.path.join(base, "owrx", "dsp.py"),
         patch_dsp,
+    )
+
+    # Patch openwebrx.js to add 'horus' to the secondary_demod panel list
+    patch_file(
+        os.path.join(base, "htdocs", "openwebrx.js"),
+        patch_openwebrx_js,
     )
 
     print("[openwebrx-horus] Patching complete.")

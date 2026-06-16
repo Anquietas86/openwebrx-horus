@@ -1,32 +1,45 @@
 /**
  * OpenWebRX+ Plugin: Horus Balloon Telemetry
  *
- * Uses the standard MessagePanel framework (same as Packet, WSJT, etc.)
- * so the panel gets proper sizing, scrolling, and clear button from the
- * framework CSS. The plugin creates the panel div, defines the
- * HorusMessagePanel class, and hooks message routing.
+ * Integrates with OpenWebRX's MessagePanel framework for proper
+ * panel lifecycle (sizing, scrolling, clear button, visibility).
+ *
+ * Two integration paths (belt and suspenders):
+ * 1. PRIMARY: The installer adds 'horus' to the hardcoded panel ID list
+ *    in openwebrx.js, so the framework routes secondary_demod messages
+ *    directly to HorusMessagePanel (same as WSJT, Packet, Meshtastic, etc.)
+ * 2. FALLBACK: Hooks secondary_demod_push_data as a safety net for
+ *    installations where the openwebrx.js patch wasn't applied.
+ *
+ * Works for both bare-metal and Docker installs.
  */
 
 Plugins.horus = {
-    _version: "2.0.0",
+    _version: "2.1.0",
     _panel: null,
+    _visible: false,
+    _pendingMessages: [],
+    _initAttempts: 0,
+    _maxInitAttempts: 20,
 
     init: function() {
-        this._definePanel();
+        this._definePanelClass();
         this._createPanelDiv();
-        this._initWidget();
+        // _initWidget is called from _createPanelDiv when the div is ready
         this._hookRouting();
 
         console.log("[horus] Plugin initialized v" + this._version);
         return true;
     },
 
-    _definePanel: function() {
+    // ── Panel class definition ──────────────────────────────────────
+
+    _definePanelClass: function() {
         if (typeof window.HorusMessagePanel !== "undefined") return;
 
         function HorusMessagePanel(el) {
             MessagePanel.call(this, el);
-            this.initClearButton();
+            // initClearButton() is already called by MessagePanel constructor
         }
 
         HorusMessagePanel.prototype = Object.create(MessagePanel.prototype);
@@ -58,10 +71,10 @@ Plugins.horus = {
 
             var timeStr = this.formatTime(msg.timestamp);
             var callsign = Utils.htmlEscape(msg.callsign || "???");
-            var seq = msg.sequence !== undefined ? msg.sequence : "-";
+            var seq = msg.sequence !== undefined ? Utils.htmlEscape(String(msg.sequence)) : "-";
             var position = this.formatPosition(msg.lat, msg.lon);
             var altitude = this.formatAltitude(msg.altitude);
-            var snr = msg.snr !== undefined ? msg.snr.toFixed(1) + " dB" : "-";
+            var snr = msg.snr !== undefined ? Utils.htmlEscape(msg.snr.toFixed(1) + " dB") : "-";
             var sensors = this.formatSensors(msg);
 
             var $row = $('<tr>' +
@@ -83,6 +96,7 @@ Plugins.horus = {
             if (!timestamp) return "-";
             try {
                 var d = new Date(timestamp);
+                if (isNaN(d.getTime())) return "-";
                 return ("0" + d.getUTCHours()).slice(-2) + ":" +
                        ("0" + d.getUTCMinutes()).slice(-2) + ":" +
                        ("0" + d.getUTCSeconds()).slice(-2);
@@ -95,40 +109,42 @@ Plugins.horus = {
             if (lat === undefined || lon === undefined) return "-";
             var latStr = Math.abs(lat).toFixed(4) + (lat >= 0 ? "N" : "S");
             var lonStr = Math.abs(lon).toFixed(4) + (lon >= 0 ? "E" : "W");
-            return '<a href="https://www.google.com/maps/search/?api=1&query=' +
-                lat + ',' + lon + '" target="_blank">' +
-                latStr + ' ' + lonStr + '</a>';
+            var link = '<a href="https://www.google.com/maps/search/?api=1&query=' +
+                encodeURIComponent(lat) + ',' + encodeURIComponent(lon) +
+                '" target="_blank" rel="noopener">' +
+                Utils.htmlEscape(latStr + ' ' + lonStr) + '</a>';
+            return link;
         };
 
         HorusMessagePanel.prototype.formatAltitude = function(alt) {
             if (alt === undefined || alt === null) return "-";
-            return alt.toLocaleString() + " m";
+            return Utils.htmlEscape(alt.toLocaleString() + " m");
         };
 
         HorusMessagePanel.prototype.linkCallsign = function(callsign) {
             return '<a href="https://amateur.sondehub.org/#!mt=Mapnik&mz=9&qm=6_hours' +
-                '&q=' + encodeURIComponent(callsign) + '" target="_blank">' +
-                callsign + '</a>';
+                '&q=' + encodeURIComponent(callsign) +
+                '" target="_blank" rel="noopener">' + callsign + '</a>';
         };
 
         HorusMessagePanel.prototype.formatSensors = function(msg) {
             var parts = [];
             if (msg.temperature !== undefined)
-                parts.push(msg.temperature.toFixed(1) + "°C");
+                parts.push(Utils.htmlEscape(msg.temperature.toFixed(1) + "°C"));
             if (msg.humidity !== undefined)
-                parts.push(msg.humidity.toFixed(0) + "%RH");
+                parts.push(Utils.htmlEscape(msg.humidity.toFixed(0) + "%RH"));
             if (msg.pressure !== undefined)
-                parts.push(msg.pressure.toFixed(1) + "hPa");
+                parts.push(Utils.htmlEscape(msg.pressure.toFixed(1) + "hPa"));
             if (msg.battery !== undefined)
-                parts.push(msg.battery.toFixed(2) + "V");
+                parts.push(Utils.htmlEscape(msg.battery.toFixed(2) + "V"));
             else if (msg.battery_voltage !== undefined)
-                parts.push(msg.battery_voltage.toFixed(2) + "V");
+                parts.push(Utils.htmlEscape(msg.battery_voltage.toFixed(2) + "V"));
             if (msg.sats !== undefined)
-                parts.push(msg.sats + " sats");
+                parts.push(Utils.htmlEscape(String(msg.sats) + " sats"));
             if (msg.speed !== undefined)
-                parts.push(msg.speed.toFixed(0) + "km/h");
+                parts.push(Utils.htmlEscape(msg.speed.toFixed(0) + "km/h"));
             if (msg.ascent_rate !== undefined)
-                parts.push(msg.ascent_rate.toFixed(1) + "m/s");
+                parts.push(Utils.htmlEscape(msg.ascent_rate.toFixed(1) + "m/s"));
 
             var customNames = msg.custom_field_names || [];
             for (var i = 0; i < customNames.length; i++) {
@@ -136,14 +152,16 @@ Plugins.horus = {
                 if (msg[name] !== undefined) {
                     var val = msg[name];
                     if (typeof val === "number" && val % 1 !== 0) val = val.toFixed(2);
-                    parts.push(name + ":" + val);
+                    parts.push(Utils.htmlEscape(name + ":" + val));
                 }
             }
-            return parts.length > 0 ? Utils.htmlEscape(parts.join(" | ")) : "-";
+            return parts.length > 0 ? parts.join(" | ") : "-";
         };
 
         window.HorusMessagePanel = HorusMessagePanel;
 
+        // jQuery widget registration — required for the framework's
+        // $('#openwebrx-panel-horus-message').horusMessagePanel() call
         $.fn.horusMessagePanel = function() {
             if (!this.data("panel")) {
                 this.data("panel", new HorusMessagePanel(this));
@@ -154,13 +172,30 @@ Plugins.horus = {
         console.log("[horus] HorusMessagePanel class registered");
     },
 
+    // ── Panel div creation (with retry) ─────────────────────────────
+
     _createPanelDiv: function() {
-        if (document.getElementById("openwebrx-panel-horus-message")) return;
+        if (document.getElementById("openwebrx-panel-horus-message")) {
+            // Div already exists — just init the widget
+            this._initWidget();
+            return;
+        }
 
         var container = document.getElementById("openwebrx-panels-container-left");
-        if (!container) return;
+        if (!container) {
+            this._initAttempts++;
+            if (this._initAttempts < this._maxInitAttempts) {
+                console.warn("[horus] Panels container not found — retrying in 500ms (attempt " +
+                    this._initAttempts + "/" + this._maxInitAttempts + ")");
+                setTimeout(() => this._createPanelDiv(), 500);
+            } else {
+                console.error("[horus] Panels container not found after " +
+                    this._maxInitAttempts + " attempts — giving up");
+            }
+            return;
+        }
 
-        // Insert before the first message panel (same area as other digital mode panels)
+        // Insert before the first message panel
         var firstMsg = container.querySelector(".openwebrx-message-panel");
 
         var div = document.createElement("div");
@@ -176,46 +211,125 @@ Plugins.horus = {
             container.appendChild(div);
         }
 
-        console.log("[horus] Panel div created (standard framework pattern)");
+        console.log("[horus] Panel div created");
+        this._initWidget();
     },
 
+    // ── Widget initialization ──────────────────────────────────────
+
     _initWidget: function() {
+        if (this._panel) return;  // already initialized
+
         var $el = $("#openwebrx-panel-horus-message");
         if ($el.length) {
             this._panel = $el.horusMessagePanel();
             console.log("[horus] jQuery widget initialized");
+
+            // Flush any pending messages that arrived before the panel was ready
+            if (this._pendingMessages.length > 0) {
+                console.log("[horus] Flushing " + this._pendingMessages.length + " pending messages");
+                var msgs = this._pendingMessages;
+                this._pendingMessages = [];
+                for (var i = 0; i < msgs.length; i++) {
+                    if (this._panel.supportsMessage(msgs[i])) {
+                        this._showPanel();
+                        this._panel.pushMessage(msgs[i]);
+                    }
+                }
+            }
+        } else {
+            console.warn("[horus] Panel div not found — widget deferred");
         }
     },
 
+    // ── Panel visibility ────────────────────────────────────────────
+
     _showPanel: function() {
         var el = document.getElementById("openwebrx-panel-horus-message");
-        if (el && el.style.display === "none") {
-            // Strip framework panel classes that collapse height to 0,
-            // then apply our own layout styles
-            el.className = "";
-            el.style.cssText = "display:block; max-height:300px; overflow-y:auto; flex-shrink:0; width:619px; margin-top:4px; background:rgba(0,0,0,0.85);";
-            // Also hide the empty digimodes grey box
+        if (!el) return;
+
+        if (!this._visible) {
+            el.style.display = "block";
+            el.style.maxHeight = "300px";
+            el.style.overflowY = "auto";
+            el.style.flexShrink = "0";
+            el.style.marginTop = "4px";
+            el.style.background = "rgba(0,0,0,0.85)";
+
+            // Hide the empty digimodes placeholder if present
             var digi = document.getElementById("openwebrx-panel-digimodes");
             if (digi) digi.style.display = "none";
+
+            this._visible = true;
+            console.log("[horus] Panel shown");
+
+            // Monitor for external display changes (framework may hide on mode switch)
+            this._watchDisplay(el);
+        }
+
+        // Ensure panel stays visible
+        if (el.style.display === "none") {
+            el.style.display = "block";
         }
     },
+
+    _watchDisplay: function(el) {
+        if (this._displayObserver) return;
+        var self = this;
+        this._displayObserver = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.attributeName === "style" &&
+                    el.style.display === "none" &&
+                    self._visible) {
+                    console.log("[horus] Panel hidden externally — restoring visibility");
+                    el.style.display = "block";
+                }
+            });
+        });
+        this._displayObserver.observe(el, {
+            attributes: true,
+            attributeFilter: ["style"]
+        });
+    },
+
+    // ── Message routing hook (fallback safety net) ──────────────────
 
     _hookRouting: function() {
         var self = this;
 
-        // Hook the fallback — framework calls this when no built-in panel claims the message
-        var origPush = window.secondary_demod_push_data;
-        window.secondary_demod_push_data = function(value) {
-            if (self._panel && self._panel.supportsMessage(value)) {
-                self._showPanel();
-                self._panel.pushMessage(value);
-                return;
-            }
-            if (typeof origPush === "function") {
-                origPush.apply(this, arguments);
+        var attemptHook = function() {
+            if (typeof window.secondary_demod_push_data === "function") {
+                var origPush = window.secondary_demod_push_data;
+                window.secondary_demod_push_data = function(value) {
+                    // Primary path: if panel is ready, route Horus messages to it
+                    if (self._panel && self._panel.supportsMessage(value)) {
+                        self._showPanel();
+                        self._panel.pushMessage(value);
+                        return;
+                    }
+
+                    // Panel not ready yet but message is Horus — queue it
+                    if (value && value.mode === "Horus") {
+                        self._pendingMessages.push(value);
+                        console.log("[horus] Queued message (panel not ready, " +
+                            self._pendingMessages.length + " pending)");
+                        // Retry panel initialization
+                        if (!self._panel) {
+                            self._createPanelDiv();
+                        }
+                        return;
+                    }
+
+                    // Not a Horus message — pass through to original handler
+                    origPush.apply(this, arguments);
+                };
+                console.log("[horus] Message routing hooked (fallback)");
+            } else {
+                console.warn("[horus] secondary_demod_push_data not ready — retrying in 500ms");
+                setTimeout(attemptHook, 500);
             }
         };
 
-        console.log("[horus] Message routing hooked");
+        attemptHook();
     }
 };

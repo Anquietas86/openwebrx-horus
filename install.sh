@@ -69,16 +69,22 @@ if $UNINSTALL; then
     # Remove copied files
     rm -f "$OWRX/owrx/horus.py"
     rm -f "$OWRX/owrx/chain/horus.py"
-    rm -f "$OWRX/htdocs/lib/HorusMessagePanel.js"
-    rm -f "$OWRX/htdocs/css/horus.css"
+    rm -rf "$OWRX/htdocs/plugins/receiver/horus"
     info "Removed plugin files"
 
-    # Remove patched blocks from files (everything between MARKER BEGIN and MARKER END)
+    # Remove init.js entry
+    INIT_JS="$OWRX/htdocs/plugins/receiver/init.js"
+    if [[ -f "$INIT_JS" ]] && grep -q "'horus'" "$INIT_JS"; then
+        sed -i "/'horus'/d" "$INIT_JS"
+        info "Removed horus from init.js"
+    fi
+
+    # Remove patched blocks from Python source files
     for f in \
         "$OWRX/owrx/feature.py" \
         "$OWRX/owrx/modes.py" \
         "$OWRX/owrx/service/__init__.py" \
-        "$OWRX/htdocs/index.html" \
+        "$OWRX/owrx/dsp.py" \
         "$OWRX/htdocs/openwebrx.js"
     do
         if [[ -f "$f" ]] && grep -q "$MARKER" "$f"; then
@@ -96,8 +102,8 @@ fi
 if python3 -c "import horusdemodlib" 2>/dev/null; then
     info "horusdemodlib found"
 else
-    warn "horusdemodlib not installed. Installing via pip..."
-    pip3 install horusdemodlib || error "Failed to install horusdemodlib"
+    warn "horusdemodlib not installed. Installing via pip (--user)..."
+    pip3 install --user horusdemodlib || error "Failed to install horusdemodlib"
     info "horusdemodlib installed"
 fi
 
@@ -296,57 +302,27 @@ PYEOF
     info "Patched service/__init__.py"
 fi
 
-# ── Install: patch index.html ───────────────────────────────────────
+# ── Install: frontend plugin ────────────────────────────────────────
 
-INDEX_FILE="$OWRX/htdocs/index.html"
+info "Installing frontend plugin..."
 
-if grep -q "horus-message" "$INDEX_FILE"; then
-    info "index.html already patched, skipping"
-else
-    backup "$INDEX_FILE"
+# Copy plugin files to OpenWebRX's plugin directory
+PLUGIN_DIR="$OWRX/htdocs/plugins/receiver/horus"
+mkdir -p "$PLUGIN_DIR"
+cp "$SCRIPT_DIR/plugin/horus/horus.js"  "$PLUGIN_DIR/"
+cp "$SCRIPT_DIR/plugin/horus/horus.css" "$PLUGIN_DIR/"
+info "Copied plugin to $PLUGIN_DIR"
 
-    python3 - "$INDEX_FILE" <<'PYEOF'
-import sys
-
-path = sys.argv[1]
-marker = "<!-- openwebrx-horus"
-
-with open(path, 'r') as f:
-    content = f.read()
-
-# 1. Add CSS link in <head> before </head>
-css_link = '''    {marker} BEGIN -->
-    <link rel="stylesheet" type="text/css" href="css/horus.css" />
-    {marker} END -->'''.format(marker=marker)
-content = content.replace('</head>', css_link + '\n</head>')
-
-# 2. Add JS before </body>
-js_link = '''    {marker} BEGIN -->
-    <script src="lib/HorusMessagePanel.js"></script>
-    {marker} END -->'''.format(marker=marker)
-content = content.replace('</body>', js_link + '\n</body>')
-
-# 3. Add panel div — find the last message panel div and insert after it
-panel_div = '''        {marker} BEGIN -->
-        <div class="openwebrx-panel openwebrx-message-panel" id="openwebrx-panel-horus-message" style="display: none; width: 619px;" data-panel-name="horus-message"></div>
-        {marker} END -->'''.format(marker=marker)
-
-# Insert after the last openwebrx-message-panel div
-import re
-# Find all message panel divs and insert after the last one
-panels = list(re.finditer(r'<div[^>]*openwebrx-message-panel[^>]*></div>', content))
-if panels:
-    last = panels[-1]
-    pos = last.end()
-    content = content[:pos] + '\n' + panel_div + content[pos:]
-
-with open(path, 'w') as f:
-    f.write(content)
-PYEOF
-    info "Patched index.html"
+# Create or update init.js to load the horus plugin
+INIT_JS="$OWRX/htdocs/plugins/receiver/init.js"
+if [ ! -f "$INIT_JS" ]; then
+    echo "Plugins.load('horus');" > "$INIT_JS"
+elif ! grep -q "'horus'" "$INIT_JS"; then
+    echo "Plugins.load('horus');" >> "$INIT_JS"
 fi
+info "init.js updated"
 
-# ── Install: patch openwebrx.js ─────────────────────────────────────
+# ── Install: patch openwebrx.js (add horus to panel list) ────────────
 
 JS_FILE="$OWRX/htdocs/openwebrx.js"
 
@@ -356,28 +332,36 @@ else
     backup "$JS_FILE"
 
     python3 - "$JS_FILE" <<'PYEOF'
-import sys, re
+import sys
 
 path = sys.argv[1]
+marker = "// openwebrx-horus"
 
 with open(path, 'r') as f:
     content = f.read()
 
-# Add 'horus' to all panel ID arrays that contain 'meshtastic' (the last standard panel).
-# These arrays appear in both secondary_demod_init and the message routing.
-# Pattern: 'meshtastic'] becomes 'meshtastic', 'horus']
-
-content = content.replace("'meshtastic']", "'meshtastic', 'horus']")
+# Add 'horus' to the secondary_demod panel ID list.
+# The framework iterates this list to route messages to panels.
+# Pattern: ['wsjt', 'packet', ..., 'meshtastic'] → add 'horus'
+# We find the array containing 'meshtastic' and insert 'horus' before the closing ]
+lines = content.split('\n')
+for i, line in enumerate(lines):
+    stripped = line.strip()
+    if "'meshtastic'" in stripped and stripped.endswith("].map("):
+        # Insert 'horus' before the closing bracket
+        new_line = line.replace("'meshtastic']", "'meshtastic', 'horus']")
+        lines[i] = marker + " BEGIN"
+        lines.insert(i + 1, new_line)
+        lines.insert(i + 2, marker + " END")
+        break
 
 with open(path, 'w') as f:
-    f.write(content)
+    f.write('\n'.join(lines))
 PYEOF
     info "Patched openwebrx.js"
 fi
 
 # ── Install: patch dsp.py ──────────────────────────────────────────
-
-DSP_FILE="$OWRX/owrx/dsp.py"
 
 if grep -q 'horus_binary' "$DSP_FILE"; then
     info "dsp.py already patched, skipping"
@@ -393,8 +377,8 @@ marker = "# openwebrx-horus"
 with open(path, 'r') as f:
     content = f.read()
 
-# 1. Fix ModulationValidator regex to allow underscores
-content = content.replace('"^[a-z0-9\\\\-]+$"', '"^[a-z0-9_\\\\-]+$"', 1)
+# 1. Fix ModulationValidator regex to allow underscores for horus modulations
+content = content.replace('"^[a-z0-9\\-]+$"', '"^[a-z0-9_\\-]+$"', 1)
 
 # 2. Add Horus to _getSecondaryDemodulator() — before setSecondaryDemodulator method
 lines = content.split('\n')

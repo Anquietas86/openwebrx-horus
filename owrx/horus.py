@@ -16,18 +16,33 @@ from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
 from horusdemodlib.utils import telem_to_sondehub
 
-from owrx.config import Config
+try:
+    from owrx.config import Config
+except ImportError:
+    Config = None
 
 try:
     from owrx.toolbox import TextParser
 except ImportError:
-    from owrx.parser import TextParser
+    try:
+        from owrx.parser import TextParser
+    except ImportError:
+        # Standalone / testing: provide a minimal base class
+        class TextParser:
+            def __init__(self):
+                pass
 
 try:
     from owrx.map import Map, LatLngLocation
 except ImportError:
     Map = None
-    LatLngLocation = None
+    # Provide a dummy base class so HorusLocation can be defined
+    class LatLngLocation:
+        def __init__(self, lat, lon):
+            self.lat = lat
+            self.lon = lon
+        def __dict__(self):
+            return {"lat": self.lat, "lon": self.lon}
 
 try:
     from owrx.metrics import Metrics, CounterMetric
@@ -58,6 +73,47 @@ HORUS_MODES = {
 HORUS_SAMPLE_RATE = 48000
 
 
+def format_horus_telemetry(data: dict) -> dict:
+    """Format decoded Horus telemetry for frontend display.
+
+    Shared between HorusParser._build_output and
+    HorusDemodulatorChain._format_for_frontend.
+    """
+    out = {
+        "mode": "Horus",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    field_map = {
+        "callsign": "callsign",
+        "latitude": "lat",
+        "longitude": "lon",
+        "altitude": "altitude",
+        "sequence_number": "sequence",
+        "snr": "snr",
+        "modulation": "modulation",
+    }
+    for src, dst in field_map.items():
+        if src in data:
+            out[dst] = data[src]
+
+    sensor_keys = (
+        "temperature", "humidity", "battery", "sats",
+        "speed", "ascent_rate", "pressure", "battery_voltage",
+    )
+    for key in sensor_keys:
+        if key in data:
+            out[key] = data[key]
+
+    if data.get("custom_field_names"):
+        for name in data["custom_field_names"]:
+            if name in data:
+                out[name] = data[name]
+        out["custom_field_names"] = data["custom_field_names"]
+
+    return out
+
+
 class HorusSondehubUploader:
     """
     Singleton manager for the SondeHub Amateur uploader.
@@ -84,6 +140,9 @@ class HorusSondehubUploader:
 
     def _init_uploader(self):
         try:
+            if Config is None:
+                logger.warning("OpenWebRX Config not available — SondeHub uploader disabled")
+                return
             pm = Config.get()
             callsign = pm["receiver_callsign"] if "receiver_callsign" in pm else "N0CALL"
             gps = pm["receiver_gps"] if "receiver_gps" in pm else {}
@@ -131,6 +190,8 @@ class HorusSondehubUploader:
                 pass
             self._uploader = None
             self._started = False
+        # Reset singleton so a new instance can be created on next use
+        HorusSondehubUploader._instance = None
 
 
 class HorusLocation(LatLngLocation):
@@ -256,6 +317,7 @@ class HorusParser(TextParser):
     """
 
     def __init__(self, service=False):
+        super().__init__()
         self.service = service
         self.band = None
         self.metric = None
@@ -301,39 +363,7 @@ class HorusParser(TextParser):
         return out
 
     def _build_output(self, data: dict) -> dict:
-        out = {
-            "mode": "Horus",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-
-        field_map = {
-            "callsign": "callsign",
-            "latitude": "lat",
-            "longitude": "lon",
-            "altitude": "altitude",
-            "sequence_number": "sequence",
-            "snr": "snr",
-            "modulation": "modulation",
-        }
-        for src, dst in field_map.items():
-            if src in data:
-                out[dst] = data[src]
-
-        sensor_keys = (
-            "temperature", "humidity", "battery", "sats",
-            "speed", "ascent_rate", "pressure", "battery_voltage",
-        )
-        for key in sensor_keys:
-            if key in data:
-                out[key] = data[key]
-
-        if data.get("custom_field_names"):
-            for name in data["custom_field_names"]:
-                if name in data:
-                    out[name] = data[name]
-            out["custom_field_names"] = data["custom_field_names"]
-
-        return out
+        return format_horus_telemetry(data)
 
     @staticmethod
     def updateMap(data: dict, band=None, timestamp=None):

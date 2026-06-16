@@ -1,5 +1,5 @@
-/* Horus Balloon Telemetry Plugin — column styles only.
-   Panel sizing/scrolling is handled by the framework's MessagePanel CSS. */
+/* Horus Balloon Telemetry Panel — full styles.
+   Used by the plugin system (both bare-metal and Docker). */
 
 #openwebrx-panel-horus-message table {
     width: 100%;
@@ -8,8 +8,34 @@
     font-family: monospace;
 }
 
+#openwebrx-panel-horus-message thead th {
+    position: sticky;
+    top: 0;
+    background: #333;
+    color: #eee;
+    padding: 4px 6px;
+    text-align: left;
+    font-weight: bold;
+    border-bottom: 1px solid #555;
+}
+
+#openwebrx-panel-horus-message tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+#openwebrx-panel-horus-message tbody tr:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+#openwebrx-panel-horus-message td {
+    padding: 3px 6px;
+    white-space: nowrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
 #openwebrx-panel-horus-message .time {
     width: 65px;
+    color: #aaa;
 }
 
 #openwebrx-panel-horus-message .callsign {
@@ -29,6 +55,7 @@
 #openwebrx-panel-horus-message .sequence {
     width: 45px;
     text-align: right;
+    color: #aaa;
 }
 
 #openwebrx-panel-horus-message .position a {
@@ -53,5 +80,6 @@
 }
 
 #openwebrx-panel-horus-message .sensors {
+    color: #bbb;
     font-size: 11px;
 }
