@@ -235,21 +235,93 @@ def patch_dsp(content):
 
 
 def patch_openwebrx_js(content):
-    """Add 'horus' to the secondary_demod panel ID list in openwebrx.js."""
+    """Repair the secondary_demod handler and add 'horus' to the panel list.
+
+    Some OpenWebRX+ versions have a broken secondary_demod handler where the
+    .map(function(id) { line is missing, leaving orphaned }); and return
+    statements. This breaks the entire compiled receiver.js bundle.
+
+    This function handles both cases:
+    1. Broken: repair the handler + add 'horus'
+    2. Correct: just add 'horus' to the existing panel list
+    """
     m = MARKER
 
+    # The correct panel list (with 'horus' added)
+    correct_panel_line = (
+        "var panels = ['wsjt', 'packet', 'pocsag', 'page', 'sstv', "
+        "'fax', 'ism', 'hfdl', 'adsb', 'dsc', 'skimmer', 'horus']"
+        ".map(function(id) {"
+    )
+
     lines = content.split("\n")
+
+    # Find the secondary_demod case block
+    case_idx = None
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        # Find the panel array line — contains 'wsjt' and .map(
-        # Format varies: may end with ].map( or .map(function(id) {
-        if "'wsjt'" in stripped and ".map(" in stripped:
-            # Insert 'horus' before the closing bracket
-            new_line = line.replace("']", "', 'horus']", 1)
-            lines[i] = m + " BEGIN"
-            lines.insert(i + 1, new_line)
-            lines.insert(i + 2, m + " END")
+        if "case 'secondary_demod':" in line or "case \"secondary_demod\":" in line:
+            case_idx = i
             break
+
+    if case_idx is None:
+        return content  # Can't find the block, leave unchanged
+
+    # Find the end of the block (the next 'break;' after case)
+    break_idx = None
+    for i in range(case_idx + 1, min(case_idx + 30, len(lines))):
+        if lines[i].strip() == "break;":
+            break_idx = i
+            break
+
+    if break_idx is None:
+        return content
+
+    # Check if the block is broken (orphaned }); without .map()
+    block_text = "\n".join(lines[case_idx:break_idx + 1])
+    is_broken = "});" in block_text and ".map(" not in block_text
+
+    if is_broken:
+        # Replace the entire broken block with the correct one
+        indent = lines[case_idx][:len(lines[case_idx]) - len(lines[case_idx].lstrip())]
+        inner_indent = indent + "    "
+
+        new_block = [
+            indent + m + " BEGIN",
+            lines[case_idx],  # case 'secondary_demod':
+            lines[case_idx + 1],  # var value = json['value'];
+            inner_indent + correct_panel_line,
+            inner_indent + "    return $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();",
+            inner_indent + "});",
+        ]
+
+        # Copy remaining lines from the original block (panels.push, if, etc.)
+        # Skip the orphaned lines (the return and }); that have no .map)
+        skip_orphans = False
+        for i in range(case_idx + 2, break_idx):
+            stripped = lines[i].strip()
+            if stripped == "});" and not skip_orphans:
+                skip_orphans = True
+                continue
+            if skip_orphans and stripped.startswith("return ") and "MessagePanel" in stripped:
+                continue
+            new_block.append(lines[i])
+
+        new_block.append(lines[break_idx])  # break;
+        new_block.append(indent + m + " END")
+
+        # Replace the old block
+        lines = lines[:case_idx] + new_block + lines[break_idx + 1:]
+    else:
+        # File is correct — just add 'horus' to the panel list
+        for i in range(case_idx, break_idx + 1):
+            stripped = lines[i].strip()
+            if "'wsjt'" in stripped and ".map(" in stripped:
+                # Insert 'horus' before the closing bracket
+                new_line = lines[i].replace("']", "', 'horus']", 1)
+                lines[i] = m + " BEGIN"
+                lines.insert(i + 1, new_line)
+                lines.insert(i + 2, m + " END")
+                break
 
     return "\n".join(lines)
 

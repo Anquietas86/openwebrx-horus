@@ -322,7 +322,7 @@ elif ! grep -q "'horus'" "$INIT_JS"; then
 fi
 info "init.js updated"
 
-# ── Install: patch openwebrx.js (add horus to panel list) ────────────
+# ── Install: patch openwebrx.js (repair + add horus to panel list) ──
 
 JS_FILE="$OWRX/htdocs/openwebrx.js"
 
@@ -340,20 +340,90 @@ marker = "// openwebrx-horus"
 with open(path, 'r') as f:
     content = f.read()
 
-# Add 'horus' to the secondary_demod panel ID list.
-# The framework iterates this list to route messages to panels.
-# Find the array containing 'wsjt' (the first panel) and insert
-# 'horus' before the closing ] — works regardless of which panel
-# is last or whether the line ends with ].map( or .map(function(id) {
+# Repair the secondary_demod handler and add 'horus' to the panel list.
+# Some OpenWebRX+ versions have a broken handler where the .map() line
+# is missing, leaving orphaned }); and return statements. This breaks
+# the entire compiled receiver.js bundle.
+#
+# This handles both cases:
+# 1. Broken: repair the handler + add 'horus'
+# 2. Correct: just add 'horus' to the existing panel list
+
+correct_panel_line = (
+    "var panels = ['wsjt', 'packet', 'pocsag', 'page', 'sstv', "
+    "'fax', 'ism', 'hfdl', 'adsb', 'dsc', 'skimmer', 'horus']"
+    ".map(function(id) {"
+)
+
 lines = content.split('\n')
+
+# Find the secondary_demod case block
+case_idx = None
 for i, line in enumerate(lines):
-    stripped = line.strip()
-    if "'wsjt'" in stripped and ".map(" in stripped:
-        new_line = line.replace("']", "', 'horus']", 1)
-        lines[i] = marker + " BEGIN"
-        lines.insert(i + 1, new_line)
-        lines.insert(i + 2, marker + " END")
+    if "case 'secondary_demod':" in line or "case \"secondary_demod\":" in line:
+        case_idx = i
         break
+
+if case_idx is None:
+    print("WARNING: could not find secondary_demod case block")
+    sys.exit(0)
+
+# Find the end of the block (the next 'break;' after case)
+break_idx = None
+for i in range(case_idx + 1, min(case_idx + 30, len(lines))):
+    if lines[i].strip() == "break;":
+        break_idx = i
+        break
+
+if break_idx is None:
+    print("WARNING: could not find break; after secondary_demod case")
+    sys.exit(0)
+
+# Check if the block is broken (orphaned }); without .map())
+block_text = '\n'.join(lines[case_idx:break_idx + 1])
+is_broken = "});" in block_text and ".map(" not in block_text
+
+if is_broken:
+    # Replace the entire broken block with the correct one
+    indent = lines[case_idx][:len(lines[case_idx]) - len(lines[case_idx].lstrip())]
+    inner_indent = indent + "    "
+
+    new_block = [
+        indent + marker + " BEGIN",
+        lines[case_idx],  # case 'secondary_demod':
+        lines[case_idx + 1],  # var value = json['value'];
+        inner_indent + correct_panel_line,
+        inner_indent + "    return $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();",
+        inner_indent + "});",
+    ]
+
+    # Copy remaining lines from the original block (panels.push, if, etc.)
+    # Skip the orphaned lines (the return and }); that have no .map)
+    skip_orphans = False
+    for i in range(case_idx + 2, break_idx):
+        stripped = lines[i].strip()
+        if stripped == "});" and not skip_orphans:
+            skip_orphans = True
+            continue
+        if skip_orphans and stripped.startswith("return ") and "MessagePanel" in stripped:
+            continue
+        new_block.append(lines[i])
+
+    new_block.append(lines[break_idx])  # break;
+    new_block.append(indent + marker + " END")
+
+    # Replace the old block
+    lines = lines[:case_idx] + new_block + lines[break_idx + 1:]
+else:
+    # File is correct — just add 'horus' to the panel list
+    for i in range(case_idx, break_idx + 1):
+        stripped = lines[i].strip()
+        if "'wsjt'" in stripped and ".map(" in stripped:
+            new_line = lines[i].replace("']", "', 'horus']", 1)
+            lines[i] = marker + " BEGIN"
+            lines.insert(i + 1, new_line)
+            lines.insert(i + 2, marker + " END")
+            break
 
 with open(path, 'w') as f:
     f.write('\n'.join(lines))
@@ -362,6 +432,8 @@ PYEOF
 fi
 
 # ── Install: patch dsp.py ──────────────────────────────────────────
+
+DSP_FILE="$OWRX/owrx/dsp.py"
 
 if grep -q 'horus_binary' "$DSP_FILE"; then
     info "dsp.py already patched, skipping"
