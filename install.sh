@@ -342,14 +342,14 @@ with open(path, 'r') as f:
 
 # Add 'horus' to the secondary_demod panel ID list.
 # The framework iterates this list to route messages to panels.
-# Pattern: ['wsjt', 'packet', ..., 'meshtastic'] → add 'horus'
-# We find the array containing 'meshtastic' and insert 'horus' before the closing ]
+# Find the array containing 'wsjt' (the first panel) and insert
+# 'horus' before the closing ] — works regardless of which panel
+# is last in the list (skimmer, meshtastic, etc.)
 lines = content.split('\n')
 for i, line in enumerate(lines):
     stripped = line.strip()
-    if "'meshtastic'" in stripped and stripped.endswith("].map("):
-        # Insert 'horus' before the closing bracket
-        new_line = line.replace("'meshtastic']", "'meshtastic', 'horus']")
+    if stripped.endswith("].map(") and "'wsjt'" in stripped:
+        new_line = line.replace("']", "', 'horus']", 1)
         lines[i] = marker + " BEGIN"
         lines.insert(i + 1, new_line)
         lines.insert(i + 2, marker + " END")

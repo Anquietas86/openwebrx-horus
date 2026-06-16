@@ -241,8 +241,12 @@ def patch_openwebrx_js(content):
     lines = content.split("\n")
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if "'meshtastic'" in stripped and stripped.endswith("].map("):
-            new_line = line.replace("'meshtastic']", "'meshtastic', 'horus']")
+        # Find the panel array line — it ends with ].map( and contains
+        # a list of panel IDs like 'wsjt', 'packet', ..., 'skimmer' or 'meshtastic'
+        if stripped.endswith("].map(") and "'wsjt'" in stripped:
+            # Insert 'horus' before the closing bracket
+            # Find the last panel ID in the list
+            new_line = line.replace("']", "', 'horus']", 1)
             lines[i] = m + " BEGIN"
             lines.insert(i + 1, new_line)
             lines.insert(i + 2, m + " END")
