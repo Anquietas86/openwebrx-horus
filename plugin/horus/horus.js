@@ -23,13 +23,32 @@ Plugins.horus = {
     _maxInitAttempts: 20,
 
     init: function() {
+        // Defer initialization until MessagePanel is available.
+        // The plugin system loads plugins before openwebrx.js,
+        // so MessagePanel may not be defined yet.
+        this._deferredInit();
+        return true;
+    },
+
+    _deferredInit: function() {
+        if (typeof MessagePanel === "undefined") {
+            if (this._initAttempts < this._maxInitAttempts) {
+                this._initAttempts++;
+                console.log("[horus] MessagePanel not ready — retrying in 200ms (attempt " +
+                    this._initAttempts + "/" + this._maxInitAttempts + ")");
+                setTimeout(() => this._deferredInit(), 200);
+            } else {
+                console.error("[horus] MessagePanel not available after " +
+                    this._maxInitAttempts + " attempts — giving up");
+            }
+            return;
+        }
+
         this._definePanelClass();
         this._createPanelDiv();
-        // _initWidget is called from _createPanelDiv when the div is ready
         this._hookRouting();
 
         console.log("[horus] Plugin initialized v" + this._version);
-        return true;
     },
 
     // ── Panel class definition ──────────────────────────────────────
