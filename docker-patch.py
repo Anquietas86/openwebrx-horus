@@ -245,7 +245,8 @@ def patch_openwebrx_js(content):
     1. Broken: repair the handler + add 'horus'
     2. Correct: just add 'horus' to the existing panel list
     """
-    m = MARKER
+    # Use JS comment markers (not Python # markers — openwebrx.js is JavaScript)
+    js_marker = "// openwebrx-horus"
 
     # The correct panel list (with 'horus' added)
     correct_panel_line = (
@@ -276,7 +277,7 @@ def patch_openwebrx_js(content):
     if break_idx is None:
         return content
 
-    # Check if the block is broken (orphaned }); without .map()
+    # Check if the block is broken (orphaned }); without .map())
     block_text = "\n".join(lines[case_idx:break_idx + 1])
     is_broken = "});" in block_text and ".map(" not in block_text
 
@@ -286,7 +287,7 @@ def patch_openwebrx_js(content):
         inner_indent = indent + "    "
 
         new_block = [
-            indent + m + " BEGIN",
+            indent + js_marker + " BEGIN",
             lines[case_idx],  # case 'secondary_demod':
             lines[case_idx + 1],  # var value = json['value'];
             inner_indent + correct_panel_line,
@@ -307,7 +308,7 @@ def patch_openwebrx_js(content):
             new_block.append(lines[i])
 
         new_block.append(lines[break_idx])  # break;
-        new_block.append(indent + m + " END")
+        new_block.append(indent + js_marker + " END")
 
         # Replace the old block
         lines = lines[:case_idx] + new_block + lines[break_idx + 1:]
@@ -318,9 +319,9 @@ def patch_openwebrx_js(content):
             if "'wsjt'" in stripped and ".map(" in stripped:
                 # Insert 'horus' before the closing bracket
                 new_line = lines[i].replace("']", "', 'horus']", 1)
-                lines[i] = m + " BEGIN"
+                lines[i] = js_marker + " BEGIN"
                 lines.insert(i + 1, new_line)
-                lines.insert(i + 2, m + " END")
+                lines.insert(i + 2, js_marker + " END")
                 break
 
     return "\n".join(lines)
