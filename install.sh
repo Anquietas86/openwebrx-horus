@@ -344,11 +344,11 @@ with open(path, 'r') as f:
 # The framework iterates this list to route messages to panels.
 # Find the array containing 'wsjt' (the first panel) and insert
 # 'horus' before the closing ] — works regardless of which panel
-# is last in the list (skimmer, meshtastic, etc.)
+# is last or whether the line ends with ].map( or .map(function(id) {
 lines = content.split('\n')
 for i, line in enumerate(lines):
     stripped = line.strip()
-    if stripped.endswith("].map(") and "'wsjt'" in stripped:
+    if "'wsjt'" in stripped and ".map(" in stripped:
         new_line = line.replace("']", "', 'horus']", 1)
         lines[i] = marker + " BEGIN"
         lines.insert(i + 1, new_line)
