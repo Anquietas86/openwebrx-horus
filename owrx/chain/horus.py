@@ -52,7 +52,7 @@ class HorusDemodulatorChain:
         self._band = None
         self._sample_rate = None
         self._demod = None
-        self._invert_spectrum = False
+        self._invert_spectrum = True
 
     def setDialFrequency(self, frequency: int):
         self._demod.setDialFrequency(frequency)
