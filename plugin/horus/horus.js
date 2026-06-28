@@ -22,6 +22,30 @@ Plugins.horus = {
     _initAttempts: 0,
     _maxInitAttempts: 20,
 
+    // Early jQuery widget stub — registered before openwebrx.js runs
+    // so the hardcoded panel routing doesn't fail on undefined widget.
+    _earlyWidgetStub: (function() {
+        if (typeof $ !== "undefined" && !$.fn.horusMessagePanel) {
+            $.fn.horusMessagePanel = function() {
+                // Deferred: if the real panel isn't ready yet, return a
+                // dummy that silently accepts messages until init completes.
+                var panel = Plugins.horus._panel;
+                if (!panel) {
+                    // Queue messages until real panel is ready
+                    return {
+                        supportsMessage: function(msg) {
+                            return msg && msg.mode === "Horus";
+                        },
+                        pushMessage: function(msg) {
+                            Plugins.horus._pendingMessages.push(msg);
+                        }
+                    };
+                }
+                return panel;
+            };
+        }
+    })(),
+
     init: function() {
         // Defer initialization until MessagePanel is available.
         // The plugin system loads plugins before openwebrx.js,

@@ -209,6 +209,26 @@ class HorusLocation(LatLngLocation):
             res["comment"] = self.data["callsign"]
         if "sequence_number" in self.data:
             res["sequence"] = self.data["sequence_number"]
+        # Add telemetry details for map popup
+        extras = []
+        if "snr" in self.data:
+            extras.append("SNR: %.1f dB" % self.data["snr"])
+        if "temperature" in self.data:
+            extras.append("Temp: %.1f°C" % self.data["temperature"])
+        if "battery_voltage" in self.data:
+            extras.append("Batt: %.2fV" % self.data["battery_voltage"])
+        elif "battery" in self.data:
+            extras.append("Batt: %.2fV" % self.data["battery"])
+        if "speed" in self.data:
+            extras.append("Speed: %.0f km/h" % self.data["speed"])
+        if "ascent_rate" in self.data:
+            extras.append("Ascent: %.1f m/s" % self.data["ascent_rate"])
+        if "sats" in self.data:
+            extras.append("Sats: %d" % self.data["sats"])
+        elif "satellites" in self.data:
+            extras.append("Sats: %d" % self.data["satellites"])
+        if extras:
+            res["comment"] = "%s | %s" % (self.data.get("callsign", "???"), " | ".join(extras))
         res["symbol"] = self._get_symbol()
         return res
 
