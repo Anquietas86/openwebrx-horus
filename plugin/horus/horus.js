@@ -269,14 +269,15 @@ Plugins.horus = {
             console.log("[horus] jQuery widget initialized");
 
             // Flush any pending messages that arrived before the panel was ready
-            if (this._pendingMessages.length > 0) {
-                console.log("[horus] Flushing " + this._pendingMessages.length + " pending messages");
-                var msgs = this._pendingMessages;
-                this._pendingMessages = [];
-                for (var i = 0; i < msgs.length; i++) {
-                    if (this._panel.supportsMessage(msgs[i])) {
+            var pending = this._pendingMessages.concat(window._horusPendingMessages || []);
+            window._horusPendingMessages = [];
+            this._pendingMessages = [];
+            if (pending.length > 0) {
+                console.log("[horus] Flushing " + pending.length + " pending messages");
+                for (var i = 0; i < pending.length; i++) {
+                    if (this._panel.supportsMessage(pending[i])) {
                         this._showPanel();
-                        this._panel.pushMessage(msgs[i]);
+                        this._panel.pushMessage(pending[i]);
                     }
                 }
             }
