@@ -176,9 +176,9 @@ class HorusSondehubUploader:
             return
 
         try:
-            sondehub_telem = telem_to_sondehub(telemetry)
-            if sondehub_telem:
-                self._uploader.add(sondehub_telem)
+            # Pass raw telemetry directly — SondehubAmateurUploader.add()
+            # calls telem_to_sondehub() internally in its background thread.
+            self._uploader.add(telemetry)
         except Exception:
             logger.debug("SondeHub upload prep failed", exc_info=True)
 
