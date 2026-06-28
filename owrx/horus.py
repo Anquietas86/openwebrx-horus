@@ -278,6 +278,12 @@ class HorusDemodulator:
         telemetry["crc_ok"] = True
         telemetry["mode"] = self.mode_str
 
+        # horusdemodlib's telem_to_sondehub requires a 'time' field.
+        # v1 packets don't include it; v2/v3 do. Fall back to UTC now.
+        if "time" not in telemetry:
+            from datetime import datetime, timezone
+            telemetry["time"] = datetime.now(timezone.utc).strftime("%H:%M:%S")
+
         if self._dial_freq:
             telemetry["f_centre"] = self._dial_freq
 
