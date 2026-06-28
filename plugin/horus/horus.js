@@ -19,6 +19,9 @@ Plugins.horus = {
     _panel: null,
     _visible: false,
     _pendingMessages: [],
+    _mapPathPoints: [], // Store all decoded positions for map path
+    _mapPath: null,
+    _mapMarker: null,
     _initAttempts: 0,
     _maxInitAttempts: 20,
 
@@ -47,6 +50,26 @@ Plugins.horus = {
     })(),
 
     init: function() {
+        // Intercept toggle_panel to permanently block ISM and digimodes panels
+        // from showing when we're in Horus Binary mode.
+        (function blockPanels() {
+            if (typeof toggle_panel !== 'function') { setTimeout(blockPanels, 100); return; }
+            if (window._horusPanelsBlocked) return;
+            window._horusPanelsBlocked = true;
+            var origToggle = window.toggle_panel;
+            window.toggle_panel = function(what, on) {
+                if (on && (what === 'openwebrx-panel-ism-message' || what === 'openwebrx-panel-digimodes')) {
+                    console.log('[horus] Blocked panel open: ' + what);
+                    return;
+                }
+                return origToggle.apply(this, arguments);
+            };
+            // Close both immediately if already open
+            origToggle('openwebrx-panel-ism-message', false);
+            origToggle('openwebrx-panel-digimodes', false);
+            console.log('[horus] ISM + digimodes panels blocked');
+        })();
+
         // Defer initialization until MessagePanel is available.
         // The plugin system loads plugins before openwebrx.js,
         // so MessagePanel may not be defined yet.
@@ -93,23 +116,26 @@ Plugins.horus = {
         };
 
         HorusMessagePanel.prototype.render = function() {
-            $(this.el).append($(
-                '<table>' +
-                    '<thead><tr>' +
-                        '<th class="time">UTC</th>' +
-                        '<th class="callsign">Callsign</th>' +
-                        '<th class="sequence">Seq</th>' +
-                        '<th class="position">Position</th>' +
-                        '<th class="altitude">Alt (m)</th>' +
-                        '<th class="snr">SNR</th>' +
-                        '<th class="sensors">Sensors</th>' +
-                    '</tr></thead>' +
-                    '<tbody></tbody>' +
-                '</table>'
-            ));
+            // Corrected HTML string concatenation to avoid syntax errors
+            $(this.el).append($('<table>' +
+                '<thead><tr>' +
+                    '<th class="time">UTC</th>' +
+                    '<th class="callsign">Callsign</th>' +
+                    '<th class="sequence">Seq</th>' +
+                    '<th class="position">Position</th>' +
+                    '<th class="altitude">Alt (m)</th>' +
+                    '<th class="snr">SNR</th>' +
+                    '<th class="sensors">Sensors</th>' +
+                '</tr></thead><tbody></tbody>' +
+            '</table>'));
         };
 
         HorusMessagePanel.prototype.pushMessage = function(msg) {
+            // Hardcoded OpenWebRX+ secondary_demod routing calls pushMessage()
+            // directly and does NOT call Plugins.horus._showPanel(). Force the
+            // panel visible here so decoded rows are actually seen in the GUI.
+            Plugins.horus._showPanel();
+
             var $b = $(this.el).find("tbody");
 
             var timeStr = this.formatTime(msg.timestamp);
@@ -119,6 +145,11 @@ Plugins.horus = {
             var altitude = this.formatAltitude(msg.altitude);
             var snr = msg.snr !== undefined ? Utils.htmlEscape(msg.snr.toFixed(1) + " dB") : "-";
             var sensors = this.formatSensors(msg);
+
+            // Update map if position data is available
+            if (msg.lat !== undefined && msg.lon !== undefined) {
+                this.updateMap(msg.lat, msg.lon, msg.altitude, msg.callsign, msg.sequence);
+            }
 
             var $row = $('<tr>' +
                 '<td class="time">' + timeStr + '</td>' +
@@ -201,6 +232,44 @@ Plugins.horus = {
             return parts.length > 0 ? parts.join(" | ") : "-";
         };
 
+        HorusMessagePanel.prototype.updateMap = function(lat, lon, alt, callsign, seq) {
+            // Add to path
+            Plugins.horus._mapPathPoints.push([lat, lon]);
+            if (Plugins.horus._mapPathPoints.length > 500) Plugins.horus._mapPathPoints.shift(); // Keep path recent
+
+            // Initialize map if needed
+            // Ensure L (Leaflet) and rx (OpenWebRX map instance) are available
+            if (typeof L !== 'undefined' && typeof rx !== 'undefined' && rx.map) {
+                if (!Plugins.horus._mapPath) {
+                    Plugins.horus._mapPath = L.polyline(Plugins.horus._mapPathPoints, {color: '#8888ff', weight: 3, opacity: 0.7}).addTo(rx.map);
+                    console.log('[horus] Initialized map path');
+                } else {
+                    Plugins.horus._mapPath.setLatLngs(Plugins.horus._mapPathPoints);
+                }
+
+                // Add/update marker
+                var markerPos = [lat, lon];
+                var iconHtml = '<div class="horus-marker-pulse"></div><div class="horus-marker-inner">' + Utils.htmlEscape(callsign) + '</div>';
+                var markerIcon = L.divIcon({
+                    className: 'horus-map-marker',
+                    html: iconHtml,
+                    iconSize: [40, 40],
+                    iconAnchor: [20, 20]
+                });
+
+                if (!Plugins.horus._mapMarker) {
+                    Plugins.horus._mapMarker = L.marker(markerPos, { icon: markerIcon }).addTo(rx.map);
+                    console.log('[horus] Initialized map marker');
+                } else {
+                    Plugins.horus._mapMarker.setLatLng(markerPos);
+                    Plugins.horus._mapMarker.setIcon(markerIcon);
+                    // Update marker inner HTML directly if needed
+                    var inner = Plugins.horus._mapMarker.getElement().querySelector('.horus-marker-inner');
+                    if (inner) inner.innerHTML = Utils.htmlEscape(callsign);
+                }
+            }
+        };
+
         window.HorusMessagePanel = HorusMessagePanel;
 
         // jQuery widget registration — required for the framework's
@@ -218,6 +287,25 @@ Plugins.horus = {
     // ── Panel div creation (with retry) ─────────────────────────────
 
     _createPanelDiv: function() {
+        // Use the improved styling from the standalone script
+        var divHtml = '<div style="background:#1a1a2e;color:#88ccff;padding:3px 8px;font-weight:bold;' +
+            'display:flex;justify-content:space-between;align-items:center;' +
+            'border-bottom:1px solid #333;position:sticky;top:0;z-index:1;font-size:12px;">' +
+            '<span>▲ Horus Telemetry</span>' +
+            '<button id="horus-clear" style="background:#333;color:#aaa;border:none;' +
+            'padding:1px 6px;cursor:pointer;border-radius:2px;font-size:11px;">Clear</button></div>' +
+            '<table style="width:100%;border-collapse:collapse;"><thead>' +
+            '<tr style="background:#141423;position:sticky;top:22px;z-index:1;">' +
+            '<th style="color:#888;padding:2px 4px;text-align:left;width:50px;font-weight:normal;">UTC</th>' +
+            '<th style="color:#ffcc66;padding:2px 4px;text-align:left;width:65px;font-weight:normal;">Call</th>' +
+            '<th style="color:#aaa;padding:2px 4px;text-align:center;width:35px;font-weight:normal;">Seq</th>' +
+            '<th style="color:#88ccff;padding:2px 4px;text-align:left;width:120px;font-weight:normal;">Position</th>' +
+            '<th style="color:#88ff88;padding:2px 4px;text-align:left;width:60px;font-weight:normal;">Alt</th>' +
+            '<th style="color:#ff8888;padding:2px 4px;text-align:left;width:50px;font-weight:normal;">SNR</th>' +
+            '<th style="color:#aaa;padding:2px 4px;text-align:left;font-weight:normal;">Sensors</th>' +
+            '</tr></thead><tbody></tbody></table>';
+
+
         if (document.getElementById("openwebrx-panel-horus-message")) {
             // Div already exists — just init the widget
             this._initWidget();
@@ -244,15 +332,35 @@ Plugins.horus = {
         var div = document.createElement("div");
         div.id = "openwebrx-panel-horus-message";
         div.className = "openwebrx-panel openwebrx-message-panel";
-        div.style.display = "none";
-        div.style.width = "619px";
+        // Apply the inline styles from the standalone script for better appearance
+        div.style.cssText = 'width:619px;max-height:250px;overflow-y:auto;' +
+            'background:rgba(20,20,35,0.95);border:1px solid #444;border-radius:3px;' +
+            'font-family:monospace;font-size:12px;color:#e0e0e0;display:block;' +
+            'margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,0.6);flex-shrink:0;';
         div.setAttribute("data-panel-name", "horus-message");
+        div.innerHTML = divHtml; // Set the innerHTML to the new divHtml
 
         if (firstMsg) {
             container.insertBefore(div, firstMsg);
         } else {
             container.appendChild(div);
         }
+        
+        // Add clear button functionality
+        div.querySelector('#horus-clear').onclick = function() {
+            var tbody = div.querySelector('tbody');
+            if (tbody) tbody.innerHTML = '';
+            Plugins.horus._mapPathPoints = [];
+            if (Plugins.horus._mapPath) {
+                rx.map.removeLayer(Plugins.horus._mapPath);
+                Plugins.horus._mapPath = null;
+            }
+            if (Plugins.horus._mapMarker) {
+                rx.map.removeLayer(Plugins.horus._mapMarker);
+                Plugins.horus._mapMarker = null;
+            }
+        };
+
 
         console.log("[horus] Panel div created");
         this._initWidget();
@@ -269,9 +377,11 @@ Plugins.horus = {
             console.log("[horus] jQuery widget initialized");
 
             // Flush any pending messages that arrived before the panel was ready
+            // Consolidate both plugin's _pendingMessages and window._horusPendingMessages
             var pending = this._pendingMessages.concat(window._horusPendingMessages || []);
-            window._horusPendingMessages = [];
-            this._pendingMessages = [];
+            window._horusPendingMessages = []; // Clear the global queue
+            this._pendingMessages = [];        // Clear the plugin's queue
+
             if (pending.length > 0) {
                 console.log("[horus] Flushing " + pending.length + " pending messages");
                 for (var i = 0; i < pending.length; i++) {
@@ -293,16 +403,18 @@ Plugins.horus = {
         if (!el) return;
 
         if (!this._visible) {
+            // The styles are now set during creation in _createPanelDiv
+            // Just ensure display is block
             el.style.display = "block";
-            el.style.maxHeight = "300px";
-            el.style.overflowY = "auto";
-            el.style.flexShrink = "0";
-            el.style.marginTop = "4px";
-            el.style.background = "rgba(0,0,0,0.85)";
+            // No longer need to set other styles here as they are set during creation
 
             // Hide the empty digimodes placeholder if present
             var digi = document.getElementById("openwebrx-panel-digimodes");
             if (digi) digi.style.display = "none";
+            // Also hide ISM message panel
+            var ism = document.getElementById("openwebrx-panel-ism-message");
+            if (ism) ism.style.display = "none";
+
 
             this._visible = true;
             console.log("[horus] Panel shown");
