@@ -62,13 +62,13 @@ The Docker installer handles two layers:
 
 | What | Where | Persists across rebuild? |
 |------|-------|--------------------------|
-| Frontend plugin (JS/CSS) | Host plugins volume | Yes |
-| Plugin init.js registration | Host plugins volume | Yes |
+| Frontend plugin (JS/CSS) | Inside container (`htdocs/plugins/receiver/horus/`) | No — re-run installer |
+| Plugin init.js registration | Inside container | No — re-run installer |
 | Python modules | Inside container | No — re-run installer |
 | Python source patches | Inside container | No — re-run installer |
 | horusdemodlib pip package | Inside container | No — re-run installer |
 
-After a container rebuild or image update, re-run `install-docker.sh` to restore the Python side. The frontend plugin will still be there.
+After a container rebuild or image update, re-run `install-docker.sh` to restore everything. For automatic re-install on every start, use the Docker Compose override below.
 
 To uninstall:
 
@@ -121,11 +121,18 @@ For Docker, the frontend is handled via the `plugin/horus/` directory — copy i
 RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
-    ├→ OpenWebRX map (balloon marker)
-    ├→ Telemetry panel (live table)
+    ├→ OpenWebRX map (balloon marker + flight path)
+    ├→ Telemetry panel (standalone floating panel, no framework fight)
     ├→ SondeHub Amateur (automatic upload)
     └→ ReportingEngine (OpenWebRX spots)
 ```
+
+The frontend uses a **standalone IIFE** that creates an independent panel in the
+left panels container. It bypasses OpenWebRX's `MessagePanel` framework entirely —
+no CSS 3D collapse animations, no `toggle_panel` race conditions, no
+`MutationObserver` fight loops. Three-path message routing (jQuery widget stub,
+`secondary_demod_push_data` hook, direct WebSocket listener) ensures messages
+always reach the panel.
 
 ## SondeHub Amateur Integration
 
