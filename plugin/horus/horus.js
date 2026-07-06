@@ -351,11 +351,11 @@ Plugins.horus = {
             var tbody = div.querySelector('tbody');
             if (tbody) tbody.innerHTML = '';
             Plugins.horus._mapPathPoints = [];
-            if (Plugins.horus._mapPath) {
+            if (Plugins.horus._mapPath && typeof rx !== 'undefined' && rx.map) {
                 rx.map.removeLayer(Plugins.horus._mapPath);
                 Plugins.horus._mapPath = null;
             }
-            if (Plugins.horus._mapMarker) {
+            if (Plugins.horus._mapMarker && typeof rx !== 'undefined' && rx.map) {
                 rx.map.removeLayer(Plugins.horus._mapMarker);
                 Plugins.horus._mapMarker = null;
             }

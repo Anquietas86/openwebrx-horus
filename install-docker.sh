@@ -94,14 +94,34 @@ if $UNINSTALL; then
         info "Removed horus from init.js"
     fi
 
-    # Remove container-side files and patches
+    # Remove container-side files and patches using line-by-line parsing.
+    # Avoids naive sed range deletion which can remove adjacent code (pitfall #17).
     docker exec "$CONTAINER" bash -c "
         rm -f $OWRX_PY/owrx/horus.py
         rm -f $OWRX_PY/owrx/chain/horus.py
 
-        for f in $OWRX_PY/owrx/feature.py $OWRX_PY/owrx/modes.py $OWRX_PY/owrx/service/__init__.py; do
+        for f in $OWRX_PY/owrx/feature.py $OWRX_PY/owrx/modes.py $OWRX_PY/owrx/service/__init__.py $OWRX_PY/owrx/dsp.py $OWRX_PY/htdocs/openwebrx.js; do
             if grep -q '$MARKER' \"\$f\" 2>/dev/null; then
-                sed -i '/$MARKER BEGIN/,/$MARKER END/d' \"\$f\"
+                python3 - \"\$f\" '$MARKER' << 'PYEOF'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+with open(path, 'r') as fh:
+    lines = fh.readlines()
+cleaned = []
+skipping = False
+for line in lines:
+    stripped = line.strip()
+    if (marker + ' BEGIN') in stripped or ('<!-- ' + marker.lstrip('# ') + ' BEGIN -->') in stripped:
+        skipping = True
+        continue
+    if (marker + ' END') in stripped or ('<!-- ' + marker.lstrip('# ') + ' END -->') in stripped:
+        skipping = False
+        continue
+    if not skipping:
+        cleaned.append(line)
+with open(path, 'w') as fh:
+    fh.writelines(cleaned)
+PYEOF
             fi
         done
     "

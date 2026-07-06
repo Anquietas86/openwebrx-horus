@@ -104,8 +104,8 @@ If you prefer to patch by hand, see the `patches/` directory for the exact chang
 - `owrx/feature.py` — add horusdemodlib feature detection
 - `owrx/modes.py` — add Horus mode definitions
 - `owrx/service/__init__.py` — wire up the demodulator chain and parser
-- `htdocs/index.html` — add panel div, CSS, and JS includes (bare metal only)
-- `htdocs/openwebrx.js` — register the panel in message routing (bare metal only)
+- `owrx/dsp.py` — fix ModulationValidator regex for underscore mode names
+- `htdocs/openwebrx.js` — register the panel in message routing
 
 For Docker, the frontend is handled via the `plugin/horus/` directory — copy it to your plugins volume and add `Plugins.load('horus');` to `init.js`.
 

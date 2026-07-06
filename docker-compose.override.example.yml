@@ -51,16 +51,16 @@ services:
         # Copy frontend plugin to the correct OpenWebRX+ plugin path
         # URL "static/plugins/receiver/..." maps to htdocs/plugins/receiver/...
         PLUGIN_DIR="/usr/lib/python3/dist-packages/htdocs/plugins/receiver/horus"
-        mkdir -p "$$PLUGIN_DIR"
-        cp /opt/openwebrx-horus/plugin/horus/horus.js "$$PLUGIN_DIR/"
-        cp /opt/openwebrx-horus/plugin/horus/horus.css "$$PLUGIN_DIR/"
+        mkdir -p "$PLUGIN_DIR"
+        cp /opt/openwebrx-horus/plugin/horus/horus.js "$PLUGIN_DIR/"
+        cp /opt/openwebrx-horus/plugin/horus/horus.css "$PLUGIN_DIR/"
 
         # Ensure init.js loads the horus plugin
         INIT_JS="/usr/lib/python3/dist-packages/htdocs/plugins/receiver/init.js"
-        if [ ! -f "$$INIT_JS" ]; then
-          echo "Plugins.load('horus');" > "$$INIT_JS"
-        elif ! grep -q "'horus'" "$$INIT_JS"; then
-          echo "Plugins.load('horus');" >> "$$INIT_JS"
+        if [ ! -f "$INIT_JS" ]; then
+          echo "Plugins.load('horus');" > "$INIT_JS"
+        elif ! grep -q "'horus'" "$INIT_JS"; then
+          echo "Plugins.load('horus');" >> "$INIT_JS"
         fi
         echo "[openwebrx-horus] Frontend plugin ready"
 

@@ -1,12 +1,12 @@
-# Add to htdocs/index.html
+# Add to htdocs/index.html (bare-metal installs only — Docker uses plugin system)
 #
 # 1. Add CSS include in <head>, after other CSS includes:
 #
-#    <link rel="stylesheet" type="text/css" href="css/horus.css" />
+#    <link rel="stylesheet" type="text/css" href="static/plugins/receiver/horus/horus.css" />
 #
-# 2. Add JS include before </body>, after MessagePanel.js:
+# 2. Add JS include before </body>, after other plugin scripts:
 #
-#    <script src="lib/HorusMessagePanel.js"></script>
+#    <script src="static/plugins/receiver/horus/horus.js"></script>
 #
 # 3. Add the panel div inside openwebrx-panels-container-left,
 #    alongside the other message panels (wsjt, packet, pocsag, etc.):

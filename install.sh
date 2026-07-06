@@ -79,7 +79,8 @@ if $UNINSTALL; then
         info "Removed horus from init.js"
     fi
 
-    # Remove patched blocks from Python source files
+    # Remove patched blocks from Python source files using line-by-line parsing.
+    # Avoids naive sed range deletion which can remove adjacent code (pitfall #17).
     for f in \
         "$OWRX/owrx/feature.py" \
         "$OWRX/owrx/modes.py" \
@@ -88,7 +89,26 @@ if $UNINSTALL; then
         "$OWRX/htdocs/openwebrx.js"
     do
         if [[ -f "$f" ]] && grep -q "$MARKER" "$f"; then
-            sed -i "/$MARKER BEGIN/,/$MARKER END/d" "$f"
+            python3 - "$f" "$MARKER" <<'PYEOF'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+with open(path, 'r') as fh:
+    lines = fh.readlines()
+cleaned = []
+skipping = False
+for line in lines:
+    stripped = line.strip()
+    if (marker + " BEGIN") in stripped or ("<!-- " + marker.lstrip("# ") + " BEGIN -->") in stripped:
+        skipping = True
+        continue
+    if (marker + " END") in stripped or ("<!-- " + marker.lstrip("# ") + " END -->") in stripped:
+        skipping = False
+        continue
+    if not skipping:
+        cleaned.append(line)
+with open(path, 'w') as fh:
+    fh.writelines(cleaned)
+PYEOF
             info "Removed patches from $f"
         fi
     done
@@ -115,10 +135,9 @@ cp "$SCRIPT_DIR/owrx/horus.py"       "$OWRX/owrx/horus.py"
 cp "$SCRIPT_DIR/owrx/chain/horus.py" "$OWRX/owrx/chain/horus.py"
 info "Copied Python modules"
 
-mkdir -p "$OWRX/htdocs/lib" "$OWRX/htdocs/css"
-cp "$SCRIPT_DIR/htdocs/lib/HorusMessagePanel.js" "$OWRX/htdocs/lib/"
-cp "$SCRIPT_DIR/htdocs/css/horus.css"             "$OWRX/htdocs/css/"
-info "Copied frontend files"
+# Frontend files are copied to the plugin directory below (lines 310-314).
+# No separate htdocs/lib/ or htdocs/css/ copies needed — the plugin system
+# serves them from htdocs/plugins/receiver/horus/.
 
 # ── Install: patch feature.py ───────────────────────────────────────
 

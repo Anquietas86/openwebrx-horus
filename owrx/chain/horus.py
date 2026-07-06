@@ -55,7 +55,8 @@ class HorusDemodulatorChain:
         self._invert_spectrum = True
 
     def setDialFrequency(self, frequency: int):
-        self._demod.setDialFrequency(frequency)
+        if self._demod:
+            self._demod.setDialFrequency(frequency)
         try:
             from owrx.bands import Bandplan
             self._band = Bandplan.getSharedInstance().findBand(frequency)
