@@ -64,7 +64,7 @@
             panelEl.style.cssText =
                 'width:619px;max-height:250px;overflow-y:auto;' +
                 'background:rgba(20,20,35,0.95);border:1px solid #444;border-radius:3px;' +
-                'font-family:monospace;font-size:12px;color:#e0e0e0;display:block;' +
+                'font-family:monospace;font-size:12px;color:#e0e0e0;display:none;' +
                 'margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,0.6);flex-shrink:0;';
             var firstPanel = container.querySelector('.openwebrx-panel');
             if (firstPanel) container.insertBefore(panelEl, firstPanel);
@@ -75,7 +75,7 @@
                 'position:fixed;bottom:10px;left:10px;right:10px;max-height:300px;' +
                 'overflow-y:auto;background:rgba(0,0,0,0.92);border:1px solid #444;' +
                 'border-radius:4px;z-index:99999;font-family:monospace;font-size:12px;' +
-                'color:#e0e0e0;display:block;padding:0;box-shadow:0 0 20px rgba(0,0,0,0.8);';
+                'color:#e0e0e0;display:none;padding:0;box-shadow:0 0 20px rgba(0,0,0,0.8);';
             document.body.appendChild(panelEl);
         }
 
@@ -159,6 +159,11 @@
 
     function addRow(msg) {
         if (!tbody) { pending.push(msg); init(); return; }
+
+        // Show panel on first message
+        if (panelEl && panelEl.style.display === 'none') {
+            panelEl.style.display = 'block';
+        }
 
         // Dedup by callsign+seq (WebSocket listener may deliver duplicates)
         var dedupKey = (msg.callsign || '') + ':' + (msg.sequence != null ? msg.sequence : '');
