@@ -454,11 +454,40 @@ fi
 
 DSP_FILE="$OWRX/owrx/dsp.py"
 
-if grep -q 'horus_binary' "$DSP_FILE"; then
-    info "dsp.py already patched, skipping"
-else
-    backup "$DSP_FILE"
+# The ModulationValidator regex fix is idempotent and MUST run regardless of
+# whether the elif branches are already present. A prior partial patch can
+# leave the horus_binary elif branches in place while the regex fix is missing
+# (the old guard `grep -q 'horus_binary'` skipped the whole block in that case,
+# leaving `horus_binary` rejected by the validator → decoder never fires).
+# Apply the regex fix unconditionally first.
+backup "$DSP_FILE"
 
+python3 - "$DSP_FILE" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+
+with open(path, 'r') as f:
+    content = f.read()
+
+# Fix ModulationValidator regex to allow underscores for horus modulations.
+# Idempotent: only replaces if the old (underscore-less) pattern is present.
+old = '"^[a-z0-9\\-]+$"'
+new = '"^[a-z0-9_\\-]+$"'
+if old in content:
+    content = content.replace(old, new, 1)
+    print("regex fix applied")
+else:
+    print("regex fix already present (or pattern not found)")
+
+with open(path, 'w') as f:
+    f.write(content)
+PYEOF
+
+# Now add the Horus elif branches to _getSecondaryDemodulator() if not present.
+if grep -q 'horus_binary' "$DSP_FILE"; then
+    info "dsp.py elif branches already present, skipping"
+else
     python3 - "$DSP_FILE" <<'PYEOF'
 import sys
 
@@ -468,10 +497,6 @@ marker = "# openwebrx-horus"
 with open(path, 'r') as f:
     content = f.read()
 
-# 1. Fix ModulationValidator regex to allow underscores for horus modulations
-content = content.replace('"^[a-z0-9\\-]+$"', '"^[a-z0-9_\\-]+$"', 1)
-
-# 2. Add Horus to _getSecondaryDemodulator() — before setSecondaryDemodulator method
 lines = content.split('\n')
 insert_idx = None
 indent = "        "
@@ -498,7 +523,7 @@ if insert_idx is not None:
 with open(path, 'w') as f:
     f.write('\n'.join(lines))
 PYEOF
-    info "Patched dsp.py"
+    info "Patched dsp.py (elif branches)"
 fi
 
 # ── Done ────────────────────────────────────────────────────────────
