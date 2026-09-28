@@ -1,5 +1,5 @@
 /**
- * OpenWebRX+ Horus Telemetry plugin — v4.0.0
+ * OpenWebRX+ Horus Telemetry plugin — v4.0.2
  *
  * Rewritten against the OFFICIAL plugin JS API shipped in OpenWebRX+ 1.2.124+
  * (htdocs/lib/Plugins.js): Plugins.addButton / addWindow / toggleWindow.
@@ -41,6 +41,19 @@
  *
  * The plugin loader contract: Plugins.load('horus') (from plugins/receiver/
  * init.js) injects horus.js + horus.css, then awaits Plugins.horus.init().
+ *
+ * ── Map plotting was REMOVED in v4.0.2 ───────────────────────────────────
+ *
+ * v4.0.0/v4.0.1 carried code to plot the balloon on the OpenWebRX map by
+ * reaching for a global `rx.map` or `map`. That never worked on OpenWebRX+
+ * 1.2.125, and it failed SILENTLY: the MAP button opens /map in a SEPARATE
+ * browsing context (<a href="map" target="openwebrx-map">), so neither
+ * Leaflet nor the map instance exists on the page this plugin runs in.
+ *
+ * Balloon positions still reach the real map. The server-side parser calls
+ * Map.getSharedInstance().updateLocation(...) on every fix, so the balloon
+ * plots on the /map window with no help from this plugin. The dead code here
+ * is therefore deleted rather than left implied-working.
  */
 
 (function () {
@@ -48,9 +61,8 @@
 
     var WINDOW_ID  = 'horus';
     var TITLE      = 'Horus Telemetry';
-    var VERSION    = '4.0.0';
+    var VERSION    = '4.0.2';
     var MAX_ROWS   = 200;
-    var MAX_POINTS = 500;
 
     // Framework panels suppressed while Horus telemetry is in use.
     // OpenWebRX+ shows the ISM panel spuriously on some non-ISM modes, and the
@@ -63,7 +75,6 @@
 
     var win = null, scrollEl = null, tbody = null, statusEl = null;
     var pending = [];
-    var pathPoints = [], mapPath = null, mapMarker = null;
     var seen = {};          // light duplicate guard: callsign:seq
     var frames = 0;
     var autoShown = false;  // auto-open the window once per page load
@@ -83,12 +94,6 @@
     }
 
     function pad(n) { return (n < 10 ? '0' : '') + n; }
-
-    function mapObj() {
-        if (typeof rx !== 'undefined' && rx && rx.map) return rx.map;
-        if (typeof map !== 'undefined' && map) return map;   // older global
-        return null;
-    }
 
     // Poll fn() until it returns truthy, then stop. fn() returns true once the
     // thing it was waiting for exists and has been handled.
@@ -162,56 +167,9 @@
 
     function clearAll() {
         if (tbody) tbody.innerHTML = '';
-        pathPoints = [];
         seen = {};
         frames = 0;
-        var m = mapObj();
-        if (mapPath   && m) { m.removeLayer(mapPath);   mapPath = null; }
-        if (mapMarker && m) { m.removeLayer(mapMarker); mapMarker = null; }
         setStatus('Waiting for telemetry\u2026');
-    }
-
-    // ── map integration (Leaflet, via the OpenWebRX+ global) ─────────────
-
-    function updateMap(lat, lon, alt, callsign) {
-        pathPoints.push([lat, lon]);
-        if (pathPoints.length > MAX_POINTS) pathPoints.shift();
-
-        var m = mapObj();
-        if (!m || typeof L === 'undefined') return;
-
-        try {
-            if (mapPath) {
-                mapPath.setLatLngs(pathPoints);
-            } else {
-                mapPath = L.polyline(pathPoints, {
-                    color: '#ff6600', weight: 2, opacity: 0.8
-                }).addTo(m);
-            }
-
-            var icon = L.divIcon({
-                className: '',
-                html: '<div style="background:#ff6600;border:2px solid #fff;'
-                    + 'border-radius:50%;width:10px;height:10px;margin:-5px 0 0 -5px;">'
-                    + '</div><div style="background:rgba(0,0,0,0.8);color:#ff6600;'
-                    + 'padding:1px 3px;font-size:10px;white-space:nowrap;'
-                    + 'border-radius:2px;margin-top:2px;">'
-                    + esc(callsign || 'HORUS') + ' '
-                    + Math.round((alt || 0) / 1000) + 'km</div>',
-                iconAnchor: [0, 0]
-            });
-
-            if (mapMarker) {
-                mapMarker.setLatLng([lat, lon]);
-                mapMarker.setIcon(icon);
-            } else {
-                mapMarker = L.marker([lat, lon], { icon: icon }).addTo(m);
-            }
-        } catch (e) {
-            // The map may be mid-teardown on a profile switch.
-            // Never let a map problem interrupt row rendering.
-            console.warn('[horus] map update failed:', e);
-        }
     }
 
     // ── row rendering ────────────────────────────────────────────────────
@@ -304,10 +262,6 @@
                 + (msg.sequence != null ? msg.sequence : '');
         if (key !== ':' && seen[key]) return;
         if (key !== ':') seen[key] = true;
-
-        var lat = num(msg.lat), lon = num(msg.lon);
-        if (lat != null && lon != null)
-            updateMap(lat, lon, num(msg.altitude) || 0, msg.callsign || 'HORUS');
 
         renderRow(msg);
 
