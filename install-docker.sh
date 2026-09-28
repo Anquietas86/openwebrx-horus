@@ -14,12 +14,21 @@
 #   container_name:   openwebrx
 #   host_plugins_path: /opt/openwebrx/plugins
 #
+# Requirements:
+#   OpenWebRX+ 1.2.124 or newer. This plugin builds its UI with the official
+#   plugin JS API (Plugins.addWindow / Plugins.addButton) that was added in
+#   1.2.124; on older releases the telemetry window will not appear.
+#
 # What it does:
 #   1. Copies the frontend plugin to the host plugins volume
 #      (persists across container rebuilds)
 #   2. Installs horusdemodlib + Python modules inside the container
 #      (must be re-run after container rebuild)
-#   3. Patches the Python source inside the container
+#   3. Patches the Python decoder source inside the container
+#
+#   It patches NO framework JavaScript. openwebrx.js, plugins.js and index.html
+#   are only ever CLEANED of patches left behind by a v3.x install, and
+#   htdocs/css/custom.css is created if missing to stop a per-load 404.
 #
 # To uninstall:
 #   ./install-docker.sh --uninstall [container_name] [host_plugins_path]
@@ -27,7 +36,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MARKER="# openwebrx-horus"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -94,38 +102,28 @@ if $UNINSTALL; then
         info "Removed horus from init.js"
     fi
 
-    # Remove container-side files and patches using line-by-line parsing.
-    # Avoids naive sed range deletion which can remove adjacent code (pitfall #17).
+    # Remove the container-side decoder modules.
     docker exec "$CONTAINER" bash -c "
         rm -f $OWRX_PY/owrx/horus.py
         rm -f $OWRX_PY/owrx/chain/horus.py
-
-        for f in $OWRX_PY/owrx/feature.py $OWRX_PY/owrx/modes.py $OWRX_PY/owrx/service/__init__.py $OWRX_PY/owrx/dsp.py $OWRX_PY/htdocs/openwebrx.js; do
-            if grep -q '$MARKER' \"\$f\" 2>/dev/null; then
-                python3 - \"\$f\" '$MARKER' << 'PYEOF'
-import sys
-path, marker = sys.argv[1], sys.argv[2]
-with open(path, 'r') as fh:
-    lines = fh.readlines()
-cleaned = []
-skipping = False
-for line in lines:
-    stripped = line.strip()
-    if (marker + ' BEGIN') in stripped or ('<!-- ' + marker.lstrip('# ') + ' BEGIN -->') in stripped:
-        skipping = True
-        continue
-    if (marker + ' END') in stripped or ('<!-- ' + marker.lstrip('# ') + ' END -->') in stripped:
-        skipping = False
-        continue
-    if not skipping:
-        cleaned.append(line)
-with open(path, 'w') as fh:
-    fh.writelines(cleaned)
-PYEOF
-            fi
-        done
     "
-    info "Removed container-side files and patches"
+
+    # Restore the framework frontend to upstream.
+    #
+    # This deliberately does NOT delete the v3.x marker blocks. For
+    # openwebrx.js the marker block WRAPPED the `var panels = ...` line, so
+    # deleting it orphaned the trailing panels.push()/dispatch and left a file
+    # that threw on every page load. (The old loop also never matched it: it
+    # grepped for the Python-style '# openwebrx-horus' marker, while the JS
+    # markers are '// openwebrx-horus'.) --restore-frontend rebuilds the case
+    # body properly via the same code path as install.
+    if [[ -f "$SCRIPT_DIR/docker-patch.py" ]]; then
+        docker exec -i "$CONTAINER" python3 - --restore-frontend "$OWRX_PY" \
+            < "$SCRIPT_DIR/docker-patch.py"
+    else
+        warn "docker-patch.py not found next to this script; frontend left as-is"
+    fi
+    info "Removed container-side files and restored the framework frontend"
 
     warn "Restart the container to apply: docker restart $CONTAINER"
     exit 0

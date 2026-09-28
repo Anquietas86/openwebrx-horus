@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
-Idempotent patcher for OpenWebRX+ Python source files AND frontend HTML/JS.
+Idempotent patcher for OpenWebRX+ Python source files, plus frontend cleanup.
+
+v4.0.0 patches NO framework JavaScript. The plugin builds its telemetry window
+with the official plugin JS API (Plugins.addWindow / addButton), added in
+OpenWebRX+ 1.2.124, so the frontend needs no source patching at all.
 
 Adds Horus decoder support to:
   - owrx/feature.py
   - owrx/modes.py
   - owrx/service/__init__.py
   - owrx/dsp.py
-  - htdocs/openwebrx.js  (panel routing list)
-  - htdocs/index.html    (panel div + standalone handler)
 
-Safe to run multiple times — strips any existing patches first, then re-applies.
+And RESTORES / cleans, for installs upgrading from v3.x:
+  - htdocs/openwebrx.js   -> 'horus' removed from the hardcoded panel list
+  - htdocs/plugins.js     -> v3.x cache-bust stripped
+  - htdocs/index.html     -> v3.x panel div + standalone handler stripped
+  - htdocs/css/custom.css -> created empty if missing (stops a per-load 404)
+
+Safe to run multiple times.
 
 Usage:
     python3 docker-patch.py /usr/lib/python3/dist-packages
@@ -278,39 +286,70 @@ def patch_dsp(content):
     return "\n".join(lines)
 
 
-def patch_plugins_js(content):
-    """Cache-bust the Horus plugin script so browsers fetch patched horus.js."""
-    jm = JS_MARKER
-    lines = content.split("\n")
-    for i, line in enumerate(lines):
-        if 'var script_src = path + name + ".js";' in line:
-            indent = line[: len(line) - len(line.lstrip())]
-            block = [
-                line,
-                indent + jm + " BEGIN",
-                indent + 'if (!remote && name === "horus") {',
-                indent + '    script_src += "?v=20260628-visibility";',
-                indent + '}',
-                indent + jm + " END",
-            ]
-            lines = lines[:i] + block + lines[i+1:]
-            break
-    else:
-        print("  WARN: plugin script_src line not found in plugins.js — skipping cache-bust patch")
-    return "\n".join(lines)
+def clean_file(path, clean_func):
+    """Rewrite a file only if clean_func actually changes it."""
+    if not os.path.isfile(path):
+        print(f"  SKIP {os.path.relpath(path)} (not found)")
+        return False
+
+    with open(path, "r") as f:
+        content = f.read()
+
+    cleaned = clean_func(content)
+    if cleaned == content:
+        print(f"  OK   {os.path.relpath(path)} (no legacy patch)")
+        return False
+
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        f.write(cleaned)
+    os.replace(tmp_path, path)
+    print(f"  CLEANED {os.path.relpath(path)}")
+    return True
 
 
-def patch_openwebrx_js(content):
-    """Repair secondary_demod routing and add Horus to the panel list.
+def clean_plugins_js(content):
+    """Strip the v3.x ?v= cache-bust that older patchers added for horus.js.
 
-    Important: the marker block must wrap the entire generated panel-init
-    expression (var panels + return + closing });), but NOT the case/value
-    lines and NOT the subsequent panels.push/dispatch logic. Older patcher
-    versions wrapped only the var-panels line, leaving orphaned returns after
-    strip/reapply; this function rebuilds the case body from a clean canonical
-    panel-init block every time.
+    Obsolete in v4.0.0: the plugin is a normal API plugin, so no cache-busting
+    of the loader is required.
     """
-    jm = JS_MARKER
+    return strip_existing_patches_js(content)
+
+
+def clean_index_html(content):
+    """Strip every v3.x index.html patch.
+
+    v3.0.0 added a horus panel div and a standalone handler <script>, and
+    cache-busted receiver.js / plugins.js. v4.0.0 uses Plugins.addWindow() and
+    needs none of it, so both are removed and the script URLs revert to the
+    upstream form.
+    """
+    content = strip_existing_patches_html(content)
+    content = re.sub(r'src="compiled/receiver\.js(?:\?v=[^"]+)?"',
+                     'src="compiled/receiver.js"', content)
+    content = re.sub(r'src="static/plugins\.js(?:\?v=[^"]+)?"',
+                     'src="static/plugins.js"', content)
+    return content
+
+
+def restore_openwebrx_js(content):
+    """Restore htdocs/openwebrx.js to upstream — no 'horus' in the panel list.
+
+    v3.x injected 'horus' into the hardcoded panel array. v4.0.0 does not want
+    it: with 'horus' absent, openwebrx.js falls through to
+    secondary_demod_push_data(), which is the plugin's single routing path. A
+    leftover entry is actively harmful — the v4 plugin defines no
+    $.fn.horusMessagePanel, so the framework would call an undefined function,
+    the handler would throw, and every secondary_demod message would be lost.
+
+    The panel-init expression is REBUILT from a canonical upstream block rather
+    than having the marker lines deleted: deleting them removes the
+    `var panels = ...` line itself and orphans the following `return`/`});`,
+    producing exactly the broken-bundle syntax error this patch used to cause.
+    Rebuilding also drops stale fragments left by older non-idempotent
+    patchers, and clears any marker comments inside the case body.
+    """
     lines = content.split("\n")
 
     case_idx = None
@@ -319,7 +358,7 @@ def patch_openwebrx_js(content):
             case_idx = i
             break
     if case_idx is None:
-        print("  WARN: secondary_demod case not found in openwebrx.js — skipping JS patch")
+        print("  WARN: secondary_demod case not found in openwebrx.js — skipping")
         return content
 
     break_idx = None
@@ -328,13 +367,13 @@ def patch_openwebrx_js(content):
             break_idx = i
             break
     if break_idx is None:
-        print("  WARN: secondary_demod break not found — skipping JS patch")
+        print("  WARN: secondary_demod break not found — skipping")
         return content
 
     case_indent = lines[case_idx][: len(lines[case_idx]) - len(lines[case_idx].lstrip())]
     body_indent = case_indent + "    "
 
-    # Preserve the real value line if present; otherwise generate it.
+    # Preserve the real value line if present; otherwise regenerate it.
     value_line = None
     for i in range(case_idx + 1, min(case_idx + 6, break_idx)):
         if "var value = json" in lines[i]:
@@ -343,293 +382,105 @@ def patch_openwebrx_js(content):
     if value_line is None:
         value_line = body_indent + "var value = json['value'];"
 
-    # Keep the dispatch tail from panels.push(...) onward. This drops all stale
-    # var-panels/return/}); fragments produced by older non-idempotent patchers.
-    tail_start = None
+    # Keep everything from panels.push(...) to break; — that is the dispatch
+    # tail, which is upstream code we must not touch.
+    tail = []
+    keep = False
     for i in range(case_idx + 1, break_idx + 1):
-        stripped = lines[i].strip()
-        if stripped.startswith("panels.push("):
-            tail_start = i
-            break
-    if tail_start is None:
-        # Conservative fallback: keep all non-panel-init lines after value_line.
-        tail = []
-        for i in range(case_idx + 1, break_idx + 1):
-            stripped = lines[i].strip()
-            if stripped.startswith("var value = json"):
-                continue
-            if stripped.startswith("var panels ="):
-                continue
-            if stripped.startswith("return $('#openwebrx-panel-") and "MessagePanel" in stripped:
-                continue
-            if stripped == "});":
-                continue
-            if "openwebrx-horus" in stripped:
-                continue
+        if not keep and lines[i].strip().startswith("panels.push("):
+            keep = True
+        if keep:
             tail.append(lines[i])
-    else:
-        tail = lines[tail_start:break_idx + 1]
+
+    if not tail:
+        print("  WARN: panels.push(...) tail not found — skipping openwebrx.js")
+        return content
 
     canonical = [
-        body_indent + jm + " BEGIN",
-        body_indent + "var panels = ['wsjt', 'packet', 'pocsag', 'page', 'sstv', 'fax', 'ism', 'hfdl', 'adsb', 'dsc', 'skimmer', 'horus'].map(function(id) {",
+        body_indent + "var panels = ['wsjt', 'packet', 'pocsag', 'page', 'sstv', 'fax', 'ism', 'hfdl', 'adsb', 'dsc', 'skimmer', 'meshtastic'].map(function(id) {",
         body_indent + "    return $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();",
         body_indent + "});",
-        body_indent + jm + " END",
     ]
 
     new_block = [lines[case_idx], value_line] + canonical + tail
-    return "\n".join(lines[:case_idx] + new_block + lines[break_idx + 1:])
+    result = "\n".join(lines[:case_idx] + new_block + lines[break_idx + 1:])
+
+    # Validate before handing the result back. A malformed panel-init here
+    # breaks the entire compiled bundle, so refuse to write in that case.
+    panels_lines = [l for l in result.split("\n") if "var panels = [" in l]
+    if len(panels_lines) != 1:
+        print(f"  ERROR: expected 1 panel-init line, found {len(panels_lines)} — file left unchanged")
+        return content
+    if "'horus'" in panels_lines[0] or ".map(" not in panels_lines[0]:
+        print("  ERROR: panel-init line invalid — file left unchanged")
+        return content
+
+    print("  openwebrx.js: panel list restored to upstream (no 'horus')")
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Standalone handler script injected into index.html before </body>
-# This is the reliable fallback for the jQuery widget routing timing issues.
-# It bypasses the plugin system entirely and directly handles secondary_demod
-# messages for mode == "Horus" using vanilla DOM APIs.
-# ---------------------------------------------------------------------------
-STANDALONE_HANDLER = r"""<script>
-/* openwebrx-horus standalone panel handler v2.3.0
- * Nuclear option: bypass plugin system + jQuery widget routing entirely.
- * Works even when MessagePanel / $.fn.horusMessagePanel aren't ready yet.
- */
-(function() {
-    'use strict';
-
-    var panelReady = false;
-    var pending = [];
-    var panelEl = null;
-    var tbody = null;
-
-    function esc(s) {
-        var d = document.createElement('div');
-        d.textContent = String(s);
-        return d.innerHTML;
-    }
-
-    function initPanel() {
-        // Use only the FIRST instance of the div (duplicate safety)
-        var all = document.querySelectorAll('#openwebrx-panel-horus-message');
-        // Remove duplicates
-        for (var i = 1; i < all.length; i++) { all[i].parentNode.removeChild(all[i]); }
-
-        panelEl = document.getElementById('openwebrx-panel-horus-message');
-        if (!panelEl) { setTimeout(initPanel, 200); return; }
-        if (panelReady) return;
-        panelReady = true;
-
-        // Clear any existing content (the plugin may have partially rendered)
-        panelEl.innerHTML = '';
-        var tbl = document.createElement('table');
-        tbl.innerHTML = '<thead><tr>' +
-            '<th class="time">UTC</th>' +
-            '<th class="callsign">Callsign</th>' +
-            '<th class="sequence">Seq</th>' +
-            '<th class="position">Position</th>' +
-            '<th class="altitude">Alt (m)</th>' +
-            '<th class="snr">SNR</th>' +
-            '<th class="sensors">Sensors</th>' +
-            '</tr></thead><tbody></tbody>';
-        panelEl.appendChild(tbl);
-        tbody = tbl.querySelector('tbody');
-
-        // Flush pending
-        var msgs = pending.concat(window._horusPendingMessages || []);
-        window._horusPendingMessages = [];
-        pending = [];
-        for (var i = 0; i < msgs.length; i++) { addRow(msgs[i]); }
-
-        console.log('[horus-standalone] Panel ready, flushed ' + msgs.length + ' pending messages');
-    }
-
-    function showPanel() {
-        if (!panelEl) return;
-        if (panelEl.style.display === 'none' || !panelEl.style.display) {
-            panelEl.style.display = 'block';
-            panelEl.style.maxHeight = '300px';
-            panelEl.style.overflowY = 'auto';
-            panelEl.style.flexShrink = '0';
-            panelEl.style.marginTop = '4px';
-            panelEl.style.background = 'rgba(0,0,0,0.85)';
-            // Hide digimodes placeholder
-            var digi = document.getElementById('openwebrx-panel-digimodes');
-            if (digi) digi.style.display = 'none';
-        }
-    }
-
-    function addRow(msg) {
-        if (!tbody) { pending.push(msg); initPanel(); return; }
-
-        var time = '-';
-        if (msg.timestamp) {
-            try {
-                var d = new Date(msg.timestamp);
-                if (!isNaN(d.getTime())) {
-                    time = ('0' + d.getUTCHours()).slice(-2) + ':' +
-                           ('0' + d.getUTCMinutes()).slice(-2) + ':' +
-                           ('0' + d.getUTCSeconds()).slice(-2);
-                }
-            } catch(e) {}
-        }
-
-        var cs = esc(msg.callsign || '???');
-        var seq = msg.sequence !== undefined ? String(msg.sequence) : '-';
-
-        var pos = '-';
-        if (msg.lat !== undefined && msg.lon !== undefined) {
-            var lat = Math.abs(msg.lat).toFixed(4) + (msg.lat >= 0 ? 'N' : 'S');
-            var lon = Math.abs(msg.lon).toFixed(4) + (msg.lon >= 0 ? 'E' : 'W');
-            pos = '<a href="https://www.google.com/maps/search/?api=1&query=' +
-                  encodeURIComponent(msg.lat) + ',' + encodeURIComponent(msg.lon) +
-                  '" target="_blank" rel="noopener">' + esc(lat + ' ' + lon) + '</a>';
-        }
-
-        var alt = msg.altitude !== undefined ? esc(msg.altitude.toLocaleString()) + ' m' : '-';
-        var snr = msg.snr !== undefined ? esc(msg.snr.toFixed(1)) + ' dB' : '-';
-
-        var sensors = [];
-        if (msg.temperature !== undefined) sensors.push(esc(msg.temperature.toFixed(1)) + '°C');
-        if (msg.battery_voltage !== undefined) sensors.push(esc(msg.battery_voltage.toFixed(2)) + 'V');
-        else if (msg.battery !== undefined) sensors.push(esc(msg.battery.toFixed(2)) + 'V');
-        if (msg.speed !== undefined) sensors.push(esc(msg.speed.toFixed(0)) + 'km/h');
-        if (msg.ascent_rate !== undefined) sensors.push(esc(msg.ascent_rate.toFixed(1)) + 'm/s');
-        if (msg.sats !== undefined) sensors.push(esc(String(msg.sats)) + ' sats');
-        var sens = sensors.length > 0 ? sensors.join(' | ') : '-';
-
-        var tr = document.createElement('tr');
-        tr.innerHTML = '<td class="time">' + time + '</td>' +
-            '<td class="callsign"><a href="https://amateur.sondehub.org/#!mt=Mapnik&mz=9&qm=6_hours&q=' +
-            encodeURIComponent(msg.callsign || '') + '" target="_blank" rel="noopener">' + cs + '</a></td>' +
-            '<td class="sequence">' + esc(seq) + '</td>' +
-            '<td class="position">' + pos + '</td>' +
-            '<td class="altitude">' + alt + '</td>' +
-            '<td class="snr">' + snr + '</td>' +
-            '<td class="sensors">' + sens + '</td>';
-        tbody.appendChild(tr);
-
-        showPanel();
-
-        // Prune old rows (keep last 200)
-        while (tbody.children.length > 200) { tbody.removeChild(tbody.firstChild); }
-        panelEl.scrollTop = panelEl.scrollHeight;
-    }
-
-    function handleHorusMessage(msg) {
-        if (!msg || msg.mode !== 'Horus') return false;
-        if (panelReady) { addRow(msg); }
-        else { pending.push(msg); initPanel(); }
-        return true;
-    }
-
-    // Hook secondary_demod_push_data (the fallback path from openwebrx.js routing)
-    // This fires when the hardcoded panel list routing fails or falls through.
-    function hookFallback() {
-        if (typeof window.secondary_demod_push_data === 'function') {
-            var orig = window.secondary_demod_push_data;
-            window.secondary_demod_push_data = function(value) {
-                if (handleHorusMessage(value)) return;
-                orig.apply(this, arguments);
-            };
-            console.log('[horus-standalone] Hooked secondary_demod_push_data');
-        } else {
-            setTimeout(hookFallback, 200);
-        }
-    }
-
-    // Also override $.fn.horusMessagePanel once jQuery is ready.
-    // This gives the hardcoded routing a widget that routes to us,
-    // bypassing the plugin system's deferred init race.
-    function hookJQuery() {
-        if (typeof window.jQuery !== 'undefined' || typeof window.$ !== 'undefined') {
-            var jq = window.jQuery || window.$;
-            jq.fn.horusMessagePanel = function() {
-                return {
-                    supportsMessage: function(msg) {
-                        return msg && msg.mode === 'Horus';
-                    },
-                    pushMessage: function(msg) {
-                        handleHorusMessage(msg);
-                    }
-                };
-            };
-            console.log('[horus-standalone] Registered $.fn.horusMessagePanel');
-        } else {
-            setTimeout(hookJQuery, 200);
-        }
-    }
-
-    // Start everything
-    initPanel();
-    hookFallback();
-    hookJQuery();
-
-    console.log('[horus-standalone] Handler installed v2.3.0');
-})();
-</script>"""
+# v4.0.0: index.html is no longer patched
+#
+# v3.0.0 injected a horus panel div and a standalone handler <script> into
+# index.html, because the jQuery-widget panel route needed its DOM element to
+# exist before the framework's routing fired. v4.0.0 builds the telemetry
+# window with Plugins.addWindow(), which creates everything it needs at
+# runtime, so index.html is never modified -- only cleaned of the old patch.
 
 
-def patch_index_html(content):
-    """Add Horus panel div + standalone handler to index.html.
+def cleanup_frontend(base):
+    """Restore every framework frontend asset to upstream.
 
-    1. Cache-bust receiver/plugin scripts so browser gets patched assets
-    2. Insert panel div after openwebrx-panel-ism-message
-    3. Insert standalone handler script before </body>
+    Shared by the normal patch run (which must strip any v3.x residue) and by
+    --restore-frontend, which is what the Docker uninstaller calls.
+
+    The uninstaller cannot simply delete the v3.x marker blocks: for
+    openwebrx.js the block WRAPPED the `var panels = ...` line, so deleting it
+    orphans the trailing panels.push()/dispatch and leaves a file that throws
+    on every load. restore_openwebrx_js() rebuilds the case body instead.
     """
-    # Normalize any previous cache-busts, then add current versions.
-    content = re.sub(r'src="compiled/receiver\.js(?:\?v=[^"]+)?"',
-                     'src="compiled/receiver.js?v=20260628-routing"', content)
-    content = re.sub(r'src="static/plugins\.js(?:\?v=[^"]+)?"',
-                     'src="static/plugins.js?v=20260628-loader"', content)
+    patch_file(
+        os.path.join(base, "htdocs", "openwebrx.js"),
+        restore_openwebrx_js,
+        strip_func=lambda c: c,
+    )
 
-    lines = content.split("\n")
+    clean_file(os.path.join(base, "htdocs", "plugins.js"), clean_plugins_js)
+    clean_file(os.path.join(base, "htdocs", "index.html"), clean_index_html)
 
-    # --- 1. Insert panel div after ism-message ---
-    ism_idx = None
-    for i, line in enumerate(lines):
-        if 'id="openwebrx-panel-ism-message"' in line:
-            ism_idx = i
-            break
-
-    if ism_idx is not None:
-        panel_div = (
-            '            <!-- openwebrx-horus BEGIN -->\n'
-            '            <div class="openwebrx-panel openwebrx-message-panel"'
-            ' id="openwebrx-panel-horus-message"'
-            ' style="display: none; width: 619px;"'
-            ' data-panel-name="horus-message"></div>\n'
-            '            <!-- openwebrx-horus END -->'
-        )
-        lines.insert(ism_idx + 1, panel_div)
-    else:
-        print("  WARN: openwebrx-panel-ism-message not found — panel div not inserted")
-
-    # --- 2. Insert standalone handler before </body> ---
-    body_close_idx = None
-    for i in range(len(lines) - 1, -1, -1):
-        if lines[i].strip() == "</body>":
-            body_close_idx = i
-            break
-
-    if body_close_idx is not None:
-        handler_block = (
-            "    <!-- openwebrx-horus BEGIN -->\n"
-            + STANDALONE_HANDLER + "\n"
-            + "    <!-- openwebrx-horus END -->"
-        )
-        lines.insert(body_close_idx, handler_block)
-    else:
-        print("  WARN: </body> not found — standalone handler not inserted")
-
-    return "\n".join(lines)
+    # OpenWebRX+ unconditionally requests /static/css/custom.css. NOTE the URL
+    # prefix: /static/ maps to htdocs/, NOT htdocs/static/ (plugins are served
+    # from /static/plugins/receiver/... out of htdocs/plugins/receiver/...).
+    # Without this file the browser logs a 404 on every page load.
+    custom_css = os.path.join(base, "htdocs", "css", "custom.css")
+    if not os.path.isfile(custom_css):
+        os.makedirs(os.path.dirname(custom_css), exist_ok=True)
+        open(custom_css, "w").close()
+        print("  CREATED htdocs/css/custom.css (stops a per-load 404)")
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+
+    # Uninstall support: restore the frontend only, leaving Python sources to
+    # the caller (which re-installs the stock package files anyway).
+    if args and args[0] == "--restore-frontend":
+        if len(args) < 2:
+            print("Usage: python3 docker-patch.py --restore-frontend <owrx_python_path>")
+            sys.exit(1)
+        print(f"[openwebrx-horus] Restoring OpenWebRX frontend at {args[1]}...")
+        cleanup_frontend(args[1])
+        print("[openwebrx-horus] Frontend restore complete.")
+        return
+
+    if not args:
         print("Usage: python3 docker-patch.py <owrx_python_path>")
+        print("       python3 docker-patch.py --restore-frontend <owrx_python_path>")
         print("  e.g. python3 docker-patch.py /usr/lib/python3/dist-packages")
         sys.exit(1)
 
-    base = sys.argv[1]
+    base = args[0]
     print(f"[openwebrx-horus] Patching OpenWebRX at {base}...")
 
     patch_file(
@@ -652,26 +503,9 @@ def main():
         patch_dsp,
     )
 
-    # openwebrx.js — uses JS comment markers (// not #)
-    patch_file(
-        os.path.join(base, "htdocs", "openwebrx.js"),
-        patch_openwebrx_js,
-        strip_func=strip_existing_patches_js,
-    )
-
-    # plugins.js — cache-bust Horus plugin script after frontend fixes
-    patch_file(
-        os.path.join(base, "htdocs", "plugins.js"),
-        patch_plugins_js,
-        strip_func=strip_existing_patches_js,
-    )
-
-    # index.html — uses HTML comment markers
-    patch_file(
-        os.path.join(base, "htdocs", "index.html"),
-        patch_index_html,
-        strip_func=strip_existing_patches_html,
-    )
+    # Frontend — v4.0.0 patches NO framework JavaScript; it only restores
+    # whatever v3.x left behind (and creates custom.css if missing).
+    cleanup_frontend(base)
 
     print("[openwebrx-horus] Patching complete.")
 

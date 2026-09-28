@@ -68,15 +68,22 @@ docker restart openwebrx
 
 Replace `openwebrx` with your container name and `/opt/openwebrx/plugins` with your host plugins volume path.
 
-The Docker installer handles two layers:
+The Docker installer handles these layers — all inside the container, so all of them
+must be restored after a rebuild:
 
 | What | Where | Persists across rebuild? |
 |------|-------|--------------------------|
-| Frontend plugin (JS/CSS) | Inside container (`htdocs/plugins/receiver/horus/`) | No — re-run installer |
-| Plugin init.js registration | Inside container | No — re-run installer |
-| Python modules | Inside container | No — re-run installer |
-| Python source patches | Inside container | No — re-run installer |
-| horusdemodlib pip package | Inside container | No — re-run installer |
+| Frontend plugin (JS/CSS) | `htdocs/plugins/receiver/horus/` | No — re-run installer |
+| Plugin `init.js` registration | `htdocs/plugins/receiver/init.js` | No — re-run installer |
+| Python decoder modules | `owrx/horus.py`, `owrx/chain/horus.py` | No — re-run installer |
+| Python source patches (4 files) | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
+| `horusdemodlib` pip package | Container site-packages | No — re-run installer |
+
+Like the systemd installer, it patches **no framework JavaScript**. On a container that
+previously ran v3.x it additionally *restores* the frontend: `htdocs/openwebrx.js` goes
+back to upstream (stale `'horus'` panel entry removed), the old v3.x patches are stripped
+from `htdocs/plugins.js` and `htdocs/index.html`, and `htdocs/css/custom.css` is created
+if missing to stop a 404 on every page load.
 
 After a container rebuild or image update, re-run `install-docker.sh` to restore everything. For automatic re-install on every start, use the Docker Compose override below.
 
@@ -86,6 +93,11 @@ To uninstall:
 sudo ./install-docker.sh --uninstall openwebrx /opt/openwebrx/plugins
 docker restart openwebrx
 ```
+
+Uninstall removes the decoder modules and **restores the framework frontend to
+upstream**. It deliberately does not just delete patch markers: for `openwebrx.js` the
+v3.x marker block wrapped the `var panels = ...` line, so deleting it orphaned the
+trailing `panels.push()` dispatch and left a bundle that threw on every load.
 
 ### Docker Compose
 
@@ -163,8 +175,9 @@ bundle (`/compiled/receiver.js`), a single syntax error in that patched file wou
 jQuery, `MessagePanel` and every panel — the page loaded but nothing worked. The patch
 also had to be re-applied and re-verified after every OpenWebRX+ upgrade.
 
-v4.0.0 needs no such patch, and the installer actively removes the old one, restoring
-the pristine upstream file.
+v4.0.0 needs no such patch. Both the systemd and Docker installers actively *remove* the
+old one, restoring the pristine upstream file — and both refuse to write the file if the
+rebuilt panel list fails validation, because a malformed line here breaks the whole bundle.
 
 The 4 remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
 registers a decoder (feature detection, mode definition, DSP chain wiring, service
