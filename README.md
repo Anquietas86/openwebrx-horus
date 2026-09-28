@@ -8,7 +8,6 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 
 - **4FSK + RTTY demodulation** via horusdemodlib's C modem (CFFI)
 - **Auto-detection** of Horus Binary v1, v2, and v3 packet formats
-- **Map plotting** with balloon markers and telemetry popups
 - **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
 - **Telemetry panel** — a draggable, resizable floating window showing callsign, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
 - **Metrics** — decode counts tracked per band
@@ -144,7 +143,7 @@ The frontend needs no source patching: copy `plugin/horus/` to
 RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
-    ├→ OpenWebRX map (balloon marker + flight path)
+    ├→ OpenWebRX map (via the server-side parser, on the /map window)
     ├→ Telemetry window (official plugin API floating window)
     ├→ SondeHub Amateur (automatic upload)
     └→ ReportingEngine (OpenWebRX spots)
@@ -207,4 +206,16 @@ A live scrolling table with columns:
 - Drag by the title bar, resize from the corner, close with ✕ — position and size persist across reloads
 - The window opens automatically on the first decoded frame, then respects your choice; use the `TELEM` button to reopen it
 - A status line shows the running frame count and the last payload/callsign received
-- `Clear` empties the table and removes the map path and marker
+- `Clear` empties the table and resets the frame counter
+
+> **Where's the map?** This plugin does not plot on the map itself, and never
+> did on OpenWebRX+ 1.2.125. The MAP button opens `/map` in a **separate
+> browsing context** (`<a href="map" target="openwebrx-map">`), so neither
+> Leaflet nor the map instance exists on the page the plugin runs in — the old
+> plotting code was dead and failed silently, so it was removed in v4.0.2.
+>
+> Balloon positions still appear there: the **server-side** parser calls
+> `Map.getSharedInstance().updateLocation(...)` on every fix, so the balloon is
+> plotted on the `/map` window (and on
+> [SondeHub Amateur](https://amateur.sondehub.org/)) with no help from the
+> frontend.
