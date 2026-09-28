@@ -1,85 +1,121 @@
-/* Horus Balloon Telemetry Panel — full styles.
-   Used by the plugin system (both bare-metal and Docker). */
+/* Horus Balloon Telemetry — v4.0.0 styles
+ *
+ * Scoped to the official plugin window (#plugin-window-horus) created by
+ * Plugins.addWindow(). The loader injects this file automatically after
+ * horus.js, so no inline styles or external CSS injection is needed.
+ */
 
-#openwebrx-panel-horus-message table {
+#plugin-window-horus {
+    width: 640px;
+    height: 300px;
+    background: rgba(20, 20, 35, 0.96);
+    border: 1px solid #444;
+    border-radius: 3px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.65);
+    font-family: monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+#plugin-window-horus .openwebrx-plugin-header {
+    background: #1a1a2e;
+    color: #88ccff;
+    font-weight: bold;
+}
+
+/* Body is a fixed toolbar above a scrolling table. */
+#plugin-window-horus .openwebrx-plugin-body {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────── */
+
+#plugin-window-horus .horus-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 3px 6px;
+    background: #12121f;
+    border-bottom: 1px solid #333;
+}
+
+#plugin-window-horus .horus-status {
+    color: #7f8fa6;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+#plugin-window-horus .horus-clear {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 1px 8px;
+    cursor: pointer;
+}
+
+/* ── table ───────────────────────────────────────────────────────────── */
+
+#plugin-window-horus .horus-scroll {
+    flex: 1 1 auto;
+    overflow: auto;
+}
+
+#plugin-window-horus .horus-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
-    font-family: monospace;
 }
 
-#openwebrx-panel-horus-message thead th {
+#plugin-window-horus .horus-table thead th {
     position: sticky;
     top: 0;
-    background: #333;
-    color: #eee;
-    padding: 4px 6px;
+    z-index: 1;
+    background: #141423;
+    color: #888;
+    padding: 3px 5px;
     text-align: left;
-    font-weight: bold;
-    border-bottom: 1px solid #555;
+    font-weight: normal;
+    white-space: nowrap;
+    border-bottom: 1px solid #333;
 }
 
-#openwebrx-panel-horus-message tbody tr:nth-child(even) {
+#plugin-window-horus .horus-table tbody tr:nth-child(even) {
     background: rgba(255, 255, 255, 0.03);
 }
 
-#openwebrx-panel-horus-message tbody tr:hover {
-    background: rgba(255, 255, 255, 0.08);
+#plugin-window-horus .horus-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.09);
 }
 
-#openwebrx-panel-horus-message td {
-    padding: 3px 6px;
+#plugin-window-horus .horus-table td {
+    padding: 2px 5px;
     white-space: nowrap;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-#openwebrx-panel-horus-message .time {
-    width: 65px;
-    color: #aaa;
-}
-
-#openwebrx-panel-horus-message .callsign {
-    width: 90px;
-    font-weight: bold;
-}
-
-#openwebrx-panel-horus-message .callsign a {
-    color: #4fc3f7;
+#plugin-window-horus .horus-table a {
     text-decoration: none;
 }
 
-#openwebrx-panel-horus-message .callsign a:hover {
+#plugin-window-horus .time      { width: 60px;  color: #888; }
+#plugin-window-horus .callsign  { width: 70px;  color: #ffcc66; }
+#plugin-window-horus .callsign a { color: #ffcc66; }
+#plugin-window-horus .sequence  { width: 40px;  color: #aaa; text-align: center; }
+#plugin-window-horus .position  { width: 140px; }
+#plugin-window-horus .position a { color: #88ccff; }
+#plugin-window-horus .altitude  { width: 80px;  color: #88ff88; }
+#plugin-window-horus .snr       { width: 60px;  color: #ff8888; }
+#plugin-window-horus .sensors   { color: #bbb; }
+
+#plugin-window-horus .callsign a:hover,
+#plugin-window-horus .position a:hover {
     text-decoration: underline;
-}
-
-#openwebrx-panel-horus-message .sequence {
-    width: 45px;
-    text-align: right;
-    color: #aaa;
-}
-
-#openwebrx-panel-horus-message .position a {
-    color: #81c784;
-    text-decoration: none;
-}
-
-#openwebrx-panel-horus-message .position a:hover {
-    text-decoration: underline;
-}
-
-#openwebrx-panel-horus-message .altitude {
-    width: 80px;
-    text-align: right;
-    color: #ffb74d;
-    font-weight: bold;
-}
-
-#openwebrx-panel-horus-message .snr {
-    width: 65px;
-    text-align: right;
-}
-
-#openwebrx-panel-horus-message .sensors {
-    color: #bbb;
-    font-size: 11px;
 }

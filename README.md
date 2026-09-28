@@ -10,14 +10,19 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 - **Auto-detection** of Horus Binary v1, v2, and v3 packet formats
 - **Map plotting** with balloon markers and telemetry popups
 - **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
-- **Telemetry panel** — live table showing callsign, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields) alongside the waterfall
+- **Telemetry panel** — a draggable, resizable floating window showing callsign, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
 - **Metrics** — decode counts tracked per band
 
 ## Requirements
 
-- [OpenWebRX+](https://github.com/luarvique/openwebrx) (luarvique fork)
+- [OpenWebRX+](https://github.com/luarvique/openwebrx) (luarvique fork) **1.2.124 or newer**
 - Python 3.9+
 - `horusdemodlib` (`pip install horusdemodlib`)
+
+**Why 1.2.124+?** v4.0.0 builds its telemetry window on the official plugin JS API
+(`Plugins.addButton` / `Plugins.addWindow` / `Plugins.toggleWindow`), which was added
+in 1.2.124. On older releases the plugin loads but no window appears. Earlier releases
+are still supported by the v3.0.0 tag.
 
 ## Installation
 
@@ -27,22 +32,27 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 git clone https://github.com/Anquietas86/openwebrx-horus.git
 cd openwebrx-horus
 chmod +x install.sh
-sudo ./install.sh /opt/openwebrx
+sudo ./install.sh /usr/lib/python3/dist-packages   # Debian/Ubuntu package layout
 sudo systemctl restart openwebrx
 ```
 
 The installer will:
 - Install `horusdemodlib` via pip if not already present
 - Copy all plugin files (Python modules + frontend) into your OpenWebRX installation
-- Patch the 5 OpenWebRX files needed to register the decoder
+- Patch the 4 OpenWebRX Python files needed to register the decoder
 - Back up every file it modifies (`.pre-horus` suffix)
 
-The script is idempotent — safe to run more than once. Replace `/opt/openwebrx` with your actual OpenWebRX path if different.
+The script is idempotent — safe to run more than once. Use your actual OpenWebRX
+path: `/opt/openwebrx` for a source checkout, or `/usr/lib/python3/dist-packages`
+for a Debian package install.
+
+On upgrade from v3.x the installer also **removes the old `htdocs/openwebrx.js`
+patch** and restores the pristine upstream file — see *Framework patching* below.
 
 To uninstall:
 
 ```bash
-sudo ./install.sh --uninstall /opt/openwebrx
+sudo ./install.sh --uninstall /usr/lib/python3/dist-packages
 sudo systemctl restart openwebrx
 ```
 
@@ -105,9 +115,10 @@ If you prefer to patch by hand, see the `patches/` directory for the exact chang
 - `owrx/modes.py` — add Horus mode definitions
 - `owrx/service/__init__.py` — wire up the demodulator chain and parser
 - `owrx/dsp.py` — fix ModulationValidator regex for underscore mode names
-- `htdocs/openwebrx.js` — register the panel in message routing
 
-For Docker, the frontend is handled via the `plugin/horus/` directory — copy it to your plugins volume and add `Plugins.load('horus');` to `init.js`.
+The frontend needs no source patching: copy `plugin/horus/` to
+`htdocs/plugins/receiver/horus/` and add `Plugins.load('horus');` to
+`htdocs/plugins/receiver/init.js`.
 
 ### Post-install setup
 
@@ -122,17 +133,42 @@ RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
     ├→ OpenWebRX map (balloon marker + flight path)
-    ├→ Telemetry panel (standalone floating panel, no framework fight)
+    ├→ Telemetry window (official plugin API floating window)
     ├→ SondeHub Amateur (automatic upload)
     └→ ReportingEngine (OpenWebRX spots)
 ```
 
-The frontend uses a **standalone IIFE** that creates an independent panel in the
-left panels container. It bypasses OpenWebRX's `MessagePanel` framework entirely —
-no CSS 3D collapse animations, no `toggle_panel` race conditions, no
-`MutationObserver` fight loops. Three-path message routing (jQuery widget stub,
-`secondary_demod_push_data` hook, direct WebSocket listener) ensures messages
-always reach the panel.
+### Frontend (v4.0.0)
+
+The telemetry display is a floating window created with `Plugins.addWindow()`, part
+of the official plugin JS API in OpenWebRX+ 1.2.124+. The API handles dragging,
+resizing, closing and position/size persistence (localStorage) — none of which the
+plugin has to implement. A `TELEM` button added with `Plugins.addButton()` shows and
+hides the window.
+
+Message routing is a **single path**. `openwebrx.js` dispatches a `secondary_demod`
+message by offering it to each panel in a hardcoded list; when no panel claims it, it
+falls through to `secondary_demod_push_data()`. Since `horus` is deliberately *not* in
+that list, the plugin's hook on `secondary_demod_push_data` is the only consumer — so
+frames arrive exactly once.
+
+### Framework patching
+
+**v4.0.0 patches no framework JavaScript.** This is the main structural change from
+v3.x.
+
+v3.0.0 (and earlier) injected `'horus'` into the hardcoded panel array inside
+`htdocs/openwebrx.js`. Because OpenWebRX+ serves its scripts as a single concatenated
+bundle (`/compiled/receiver.js`), a single syntax error in that patched file would kill
+jQuery, `MessagePanel` and every panel — the page loaded but nothing worked. The patch
+also had to be re-applied and re-verified after every OpenWebRX+ upgrade.
+
+v4.0.0 needs no such patch, and the installer actively removes the old one, restoring
+the pristine upstream file.
+
+The 4 remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
+registers a decoder (feature detection, mode definition, DSP chain wiring, service
+dispatch).
 
 ## SondeHub Amateur Integration
 
@@ -143,9 +179,9 @@ The uploader reads your station details from OpenWebRX's config:
 
 Telemetry is batched and uploaded every 2 seconds. No API key needed — SondeHub Amateur is a free community service. Decoded balloons will appear on the [SondeHub Amateur Tracker](https://amateur.sondehub.org/).
 
-## Telemetry Panel
+## Telemetry Window
 
-The panel displays a live scrolling table with columns:
+A live scrolling table with columns:
 
 | UTC | Callsign | Seq | Position | Alt (m) | SNR | Sensors |
 |-----|----------|-----|----------|---------|-----|---------|
@@ -155,3 +191,7 @@ The panel displays a live scrolling table with columns:
 - Positions link to Google Maps
 - Sensor data includes all standard fields plus v3 custom fields
 - Auto-scrolls and prunes to 200 rows for performance
+- Drag by the title bar, resize from the corner, close with ✕ — position and size persist across reloads
+- The window opens automatically on the first decoded frame, then respects your choice; use the `TELEM` button to reopen it
+- A status line shows the running frame count and the last payload/callsign received
+- `Clear` empties the table and removes the map path and marker

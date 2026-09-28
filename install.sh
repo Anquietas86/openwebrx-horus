@@ -332,6 +332,18 @@ cp "$SCRIPT_DIR/plugin/horus/horus.js"  "$PLUGIN_DIR/"
 cp "$SCRIPT_DIR/plugin/horus/horus.css" "$PLUGIN_DIR/"
 info "Copied plugin to $PLUGIN_DIR"
 
+# OpenWebRX+ unconditionally requests /static/css/custom.css for user style
+# overrides. Note the URL prefix: /static/ maps to htdocs/, NOT htdocs/static/
+# (the plugin JS is served from /static/plugins/... out of htdocs/plugins/...).
+# So the file belongs at htdocs/css/custom.css. If it is absent the browser
+# logs a 404 on every page load, which masks real errors.
+CUSTOM_CSS="$OWRX/htdocs/css/custom.css"
+if [ ! -f "$CUSTOM_CSS" ]; then
+    mkdir -p "$(dirname "$CUSTOM_CSS")"
+    : > "$CUSTOM_CSS"
+    info "Created empty $CUSTOM_CSS (prevents a 404 on every page load)"
+fi
+
 # Create or update init.js to load the horus plugin
 INIT_JS="$OWRX/htdocs/plugins/receiver/init.js"
 if [ ! -f "$INIT_JS" ]; then
@@ -341,113 +353,130 @@ elif ! grep -q "'horus'" "$INIT_JS"; then
 fi
 info "init.js updated"
 
-# ── Install: patch openwebrx.js (repair + add horus to panel list) ──
+# ── Install: REMOVE the legacy openwebrx.js panel-list patch ────────
+#
+# v3.0.0 and earlier injected 'horus' into the hardcoded panel array in
+# htdocs/openwebrx.js. v4.0.0 uses the official plugin JS API
+# (Plugins.addWindow) and neither needs nor wants that patch:
+#
+#   - With 'horus' absent from the panel list, openwebrx.js falls through
+#     to secondary_demod_push_data() for any secondary_demod message no
+#     built-in panel claims. That is the plugin's SINGLE routing path.
+#   - Patching framework source is what made one stray syntax error capable
+#     of killing the entire compiled receiver.js bundle (no jQuery, no
+#     MessagePanel, no audio, no waterfall).
+#
+# The un-patch is surgical and version-independent: inside the marker block
+# only the ", 'horus'" addition is removed and the two marker comment lines
+# are dropped, so the upstream line is restored exactly. Deleting the whole
+# marker block instead would orphan the following `return (...)` and `});`
+# lines and break the file — see the marker-stripping pitfall in the skill.
 
 JS_FILE="$OWRX/htdocs/openwebrx.js"
 
-if grep -q "'horus'" "$JS_FILE"; then
-    info "openwebrx.js already patched, skipping"
-else
-    backup "$JS_FILE"
+if [ -f "$JS_FILE" ]; then
+    if grep -q "openwebrx-horus" "$JS_FILE"; then
+        backup "$JS_FILE"
 
-    python3 - "$JS_FILE" <<'PYEOF'
+        python3 - "$JS_FILE" <<'PYEOF'
 import sys
 
-path = sys.argv[1]
-marker = "// openwebrx-horus"
+path  = sys.argv[1]
+BEGIN = "// openwebrx-horus BEGIN"
+END   = "// openwebrx-horus END"
 
 with open(path, 'r') as f:
-    content = f.read()
+    lines = f.read().split('\n')
 
-# Repair the secondary_demod handler and add 'horus' to the panel list.
-# Some OpenWebRX+ versions have a broken handler where the .map() line
-# is missing, leaving orphaned }); and return statements. This breaks
-# the entire compiled receiver.js bundle.
-#
-# This handles both cases:
-# 1. Broken: repair the handler + add 'horus'
-# 2. Correct: just add 'horus' to the existing panel list
+out, in_block, changed = [], False, 0
 
-correct_panel_line = (
-    "var panels = ['wsjt', 'packet', 'pocsag', 'page', 'sstv', "
-    "'fax', 'ism', 'hfdl', 'adsb', 'dsc', 'skimmer', 'horus']"
-    ".map(function(id) {"
-)
+for line in lines:
+    stripped = line.strip()
 
-lines = content.split('\n')
+    if stripped == BEGIN:
+        in_block = True
+        changed += 1
+        continue
+    if stripped == END:
+        in_block = False
+        changed += 1
+        continue
 
-# Find the secondary_demod case block
-case_idx = None
-for i, line in enumerate(lines):
-    if "case 'secondary_demod':" in line or "case \"secondary_demod\":" in line:
-        case_idx = i
-        break
+    if in_block and "var panels = [" in line and "'horus'" in line:
+        line = line.replace(", 'horus'", "", 1)   # restore the upstream line
+        changed += 1
 
-if case_idx is None:
-    print("WARNING: could not find secondary_demod case block")
-    sys.exit(0)
+    out.append(line)
 
-# Find the end of the block (the next 'break;' after case)
-break_idx = None
-for i in range(case_idx + 1, min(case_idx + 30, len(lines))):
-    if lines[i].strip() == "break;":
-        break_idx = i
-        break
+if changed:
+    body = '\n'.join(out)
 
-if break_idx is None:
-    print("WARNING: could not find break; after secondary_demod case")
-    sys.exit(0)
+    # The un-patch is only correct if the upstream panels line came back
+    # exactly, with its .map() call intact and no 'horus' left in it.
+    panels_line = [l for l in body.split('\n') if 'var panels = [' in l]
+    if len(panels_line) != 1:
+        print("ERROR: expected exactly one 'var panels = [' line, found %d" % len(panels_line))
+        sys.exit(1)
+    if "'horus'" in panels_line[0]:
+        print("ERROR: 'horus' still present in the panels line; file NOT written")
+        sys.exit(1)
+    if '.map(' not in panels_line[0]:
+        print("ERROR: panels line lost its .map() call; file NOT written")
+        sys.exit(1)
 
-# Check if the block is broken (orphaned }); without .map())
-block_text = '\n'.join(lines[case_idx:break_idx + 1])
-is_broken = "});" in block_text and ".map(" not in block_text
+    # The case block must still open and close cleanly.
+    idx = body.find("case 'secondary_demod'")
+    if idx < 0:
+        print("ERROR: secondary_demod case not found; file NOT written")
+        sys.exit(1)
+    blk = body[idx:idx + 2000]
+    if '});' not in blk or 'break;' not in blk:
+        print("ERROR: secondary_demod case looks malformed; file NOT written")
+        sys.exit(1)
 
-if is_broken:
-    # Replace the entire broken block with the correct one
-    indent = lines[case_idx][:len(lines[case_idx]) - len(lines[case_idx].lstrip())]
-    inner_indent = indent + "    "
-
-    new_block = [
-        indent + marker + " BEGIN",
-        lines[case_idx],  # case 'secondary_demod':
-        lines[case_idx + 1],  # var value = json['value'];
-        inner_indent + correct_panel_line,
-        inner_indent + "    return $('#openwebrx-panel-' + id + '-message')[id + 'MessagePanel']();",
-        inner_indent + "});",
-    ]
-
-    # Copy remaining lines from the original block (panels.push, if, etc.)
-    # Skip the orphaned lines (the return and }); that have no .map)
-    skip_orphans = False
-    for i in range(case_idx + 2, break_idx):
-        stripped = lines[i].strip()
-        if stripped == "});" and not skip_orphans:
-            skip_orphans = True
-            continue
-        if skip_orphans and stripped.startswith("return ") and "MessagePanel" in stripped:
-            continue
-        new_block.append(lines[i])
-
-    new_block.append(lines[break_idx])  # break;
-    new_block.append(indent + marker + " END")
-
-    # Replace the old block
-    lines = lines[:case_idx] + new_block + lines[break_idx + 1:]
+    with open(path, 'w') as f:
+        f.write(body)
+    print("openwebrx.js: removed legacy patch (%d line(s) changed)" % changed)
 else:
-    # File is correct — just add 'horus' to the panel list
-    for i in range(case_idx, break_idx + 1):
-        stripped = lines[i].strip()
-        if "'wsjt'" in stripped and ".map(" in stripped:
-            new_line = lines[i].replace("']", "', 'horus']", 1)
-            lines[i] = marker + " BEGIN"
-            lines.insert(i + 1, new_line)
-            lines.insert(i + 2, marker + " END")
-            break
-
-with open(path, 'w') as f:
-    f.write('\n'.join(lines))
+    print("openwebrx.js: no legacy patch present")
 PYEOF
-    info "Patched openwebrx.js"
+
+        if [ $? -ne 0 ]; then
+            warn "un-patch failed; restoring pristine copy"
+            [ -f "$JS_FILE.pre-horus" ] && cp -f "$JS_FILE.pre-horus" "$JS_FILE"
+        fi
+
+        # Definitive check where a JS engine is available.
+        if command -v node >/dev/null 2>&1; then
+            if node --check "$JS_FILE" >/dev/null 2>&1; then
+                info "openwebrx.js syntax OK"
+            else
+                warn "openwebrx.js failed node syntax check — restoring pristine copy"
+                [ -f "$JS_FILE.pre-horus" ] && cp -f "$JS_FILE.pre-horus" "$JS_FILE"
+            fi
+        fi
+
+        if grep -q "'horus'" "$JS_FILE"; then
+            warn "openwebrx.js still references 'horus' — inspect $JS_FILE manually"
+        else
+            info "openwebrx.js restored — v4.0.0 does not patch framework source"
+        fi
+    else
+        # 'horus' in the panel array without marker comments would mean an
+        # older/other patcher touched the file. The v4.0.0 plugin defines no
+        # $.fn.horusMessagePanel, so a stale entry here WOULD break decoding.
+        if grep -q "'horus'" "$JS_FILE"; then
+            warn "openwebrx.js contains 'horus' but no marker comments"
+            if [ -f "$JS_FILE.pre-horus" ]; then
+                cp -f "$JS_FILE.pre-horus" "$JS_FILE"
+                info "restored pristine openwebrx.js from $JS_FILE.pre-horus"
+            else
+                error "cannot clean $JS_FILE — no .pre-horus backup available"
+            fi
+        else
+            info "openwebrx.js is unpatched (correct for v4.0.0)"
+        fi
+    fi
 fi
 
 # ── Install: patch dsp.py ──────────────────────────────────────────
