@@ -131,7 +131,7 @@ The frontend needs no source patching: copy `plugin/horus/` to
 `htdocs/plugins/receiver/horus/` and add `Plugins.load('horus');` to
 `htdocs/plugins/receiver/init.js`.
 
-### Upgrading from v4.0.2 or earlier
+### Upgrading to v5.0.0 (from v4.0.2 or earlier)
 
 The modes were renamed from `horus_binary` / `horus_rtty` to **`horus-binary` /
 `horus-rtty`**. OpenWebRX+ only accepts `[a-z0-9-]` in mode names, so the old
@@ -158,7 +158,7 @@ RF → csdr (tuning/filtering) → USB demod + AGC → 48 kHz float audio
     ├→ SondeHub Amateur (automatic upload)
 ```
 
-### Decoder chain (v4.1.0)
+### Decoder chain (v5.0.0)
 
 `owrx/chain/horus.py` follows the same pattern as upstream's own Python-thread
 decoders (SSTV, Fax): a `ServiceDemodulator` chain that declares a fixed 48 kHz audio
@@ -168,7 +168,7 @@ writes pickled telemetry dicts. The fixed rate is what lets OpenWebRX+ hand the 
 `None` there, which crashed background decoding and forced a hand-rolled Python
 resampler on the browser path.
 
-### Frontend (v4.1.0)
+### Frontend (v5.0.0)
 
 OpenWebRX+ has no plugin API for registering a new *message panel* (the stock ones
 are hardcoded in `index.html`, `openwebrx.js` and `DemodulatorPanel.updatePanels()`).
