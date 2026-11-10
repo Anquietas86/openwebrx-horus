@@ -9,8 +9,8 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 - **4FSK + RTTY demodulation** via horusdemodlib's C modem (CFFI)
 - **Auto-detection** of Horus Binary v1, v2, and v3 packet formats
 - **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
-- **Telemetry panel** — a draggable, resizable floating window showing callsign, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
-- **Metrics** — decode counts tracked per band
+- **Stock Packet panel** — decoded frames appear in OpenWebRX+'s own Packet panel (UTC, callsign, map link, one-line telemetry summary), like APRS or radiosondes
+- **TELEM window** — an optional draggable, resizable floating window with the full table: callsign, sequence, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
 
 ## Requirements
 
@@ -38,7 +38,7 @@ sudo systemctl restart openwebrx
 The installer will:
 - Install `horusdemodlib` via pip if not already present
 - Copy all plugin files (Python modules + frontend) into your OpenWebRX installation
-- Patch the 4 OpenWebRX Python files needed to register the decoder
+- Patch the OpenWebRX Python files needed to register the decoder (`feature.py`, `modes.py`, `service/__init__.py`, `dsp.py`)
 - Back up every file it modifies (`.pre-horus` suffix)
 
 The script is idempotent — safe to run more than once. Use your actual OpenWebRX
@@ -75,7 +75,7 @@ must be restored after a rebuild:
 | Frontend plugin (JS/CSS) | `htdocs/plugins/receiver/horus/` | No — re-run installer |
 | Plugin `init.js` registration | `htdocs/plugins/receiver/init.js` | No — re-run installer |
 | Python decoder modules | `owrx/horus.py`, `owrx/chain/horus.py` | No — re-run installer |
-| Python source patches (4 files) | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
+| Python source patches | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
 | `horusdemodlib` pip package | Container site-packages | No — re-run installer |
 
 Like the systemd installer, it patches **no framework JavaScript**. On a container that
@@ -125,11 +125,20 @@ If you prefer to patch by hand, see the `patches/` directory for the exact chang
 - `owrx/feature.py` — add horusdemodlib feature detection
 - `owrx/modes.py` — add Horus mode definitions
 - `owrx/service/__init__.py` — wire up the demodulator chain and parser
-- `owrx/dsp.py` — fix ModulationValidator regex for underscore mode names
+- `owrx/dsp.py` — wire up the demodulator chain for the browser (`_getSecondaryDemodulator`)
 
 The frontend needs no source patching: copy `plugin/horus/` to
 `htdocs/plugins/receiver/horus/` and add `Plugins.load('horus');` to
 `htdocs/plugins/receiver/init.js`.
+
+### Upgrading from v4.0.2 or earlier
+
+The modes were renamed from `horus_binary` / `horus_rtty` to **`horus-binary` /
+`horus-rtty`**. OpenWebRX+ only accepts `[a-z0-9-]` in mode names, so the old
+underscore names were rejected when picked in the browser (the old installers'
+attempt to widen that check never actually applied). Both installers remove the
+old patch blocks automatically. **Re-select the Horus mode in any SDR profile,
+bookmark or background-decoding config** that used the old names.
 
 ### Post-install setup
 
@@ -140,28 +149,50 @@ The frontend needs no source patching: copy `plugin/horus/` to
 ## Architecture
 
 ```
-RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
+RF → csdr (tuning/filtering) → USB demod + AGC → 48 kHz float audio
+    → HorusModule (ThreadModule) → s16 PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
-    ├→ OpenWebRX map (via the server-side parser, on the /map window)
-    ├→ Telemetry window (official plugin API floating window)
+    ├→ OpenWebRX map (server side, on the /map window)
+    ├→ Stock Packet panel + optional TELEM window (browser)
     ├→ SondeHub Amateur (automatic upload)
-    └→ ReportingEngine (OpenWebRX spots)
 ```
 
-### Frontend (v4.0.0)
+### Decoder chain (v4.1.0)
 
-The telemetry display is a floating window created with `Plugins.addWindow()`, part
-of the official plugin JS API in OpenWebRX+ 1.2.124+. The API handles dragging,
-resizing, closing and position/size persistence (localStorage) — none of which the
-plugin has to implement. A `TELEM` button added with `Plugins.addButton()` shows and
-hides the window.
+`owrx/chain/horus.py` follows the same pattern as upstream's own Python-thread
+decoders (SSTV, Fax): a `ServiceDemodulator` chain that declares a fixed 48 kHz audio
+rate via `getFixedAudioRate()`, wrapping one `ThreadModule` that reads float audio and
+writes pickled telemetry dicts. The fixed rate is what lets OpenWebRX+ hand the modem
+48 kHz audio directly, in the browser and as a background service. v4.0.x returned
+`None` there, which crashed background decoding and forced a hand-rolled Python
+resampler on the browser path.
 
-Message routing is a **single path**. `openwebrx.js` dispatches a `secondary_demod`
-message by offering it to each panel in a hardcoded list; when no panel claims it, it
-falls through to `secondary_demod_push_data()`. Since `horus` is deliberately *not* in
-that list, the plugin's hook on `secondary_demod_push_data` is the only consumer — so
-frames arrive exactly once.
+### Frontend (v4.1.0)
+
+OpenWebRX+ has no plugin API for registering a new *message panel* (the stock ones
+are hardcoded in `index.html`, `openwebrx.js` and `DemodulatorPanel.updatePanels()`).
+But the stock **Packet panel** already renders `UTC | callsign | map link | comment`
+rows, so the plugin reuses it by wrapping three prototype methods at runtime (no
+source patching):
+
+- `PacketMessagePanel.prototype.supportsMessage` also claims messages with mode `Horus`
+- `DemodulatorPanel.prototype.updatePanels` also shows the Packet panel while a
+  `horus-*` mode is selected
+- `Utils.linkifyByMode` links Horus callsigns to SondeHub Amateur
+
+The server fills in `source` and a one-line `comment` for each frame. The position
+pin opens the real OpenWebRX map at the balloon's marker.
+
+The **TELEM window** is a second, optional view built with `Plugins.addWindow()`
+(OpenWebRX+ 1.2.124+). It is fed from the same Packet panel hook, so frames still
+arrive exactly once. If the stock panel turns out to be enough, the window can be
+removed without touching the panel integration.
+
+The empty "digimodes" box OpenWebRX+ would otherwise show for a Horus mode is
+suppressed the supported way, with `secondaryFft=False` on the mode definitions.
+(v4.0.x hid it by wrapping `toggle_panel` globally, which also hid the ISM and
+digimodes panels for every other mode.)
 
 ### Framework patching
 
@@ -178,9 +209,24 @@ v4.0.0 needs no such patch. Both the systemd and Docker installers actively *rem
 old one, restoring the pristine upstream file — and both refuse to write the file if the
 rebuilt panel list fails validation, because a malformed line here breaks the whole bundle.
 
-The 4 remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
+The remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
 registers a decoder (feature detection, mode definition, DSP chain wiring, service
 dispatch).
+
+## Tests
+
+```bash
+pip install horusdemodlib pytest setuptools
+python -m pytest tests/                      # decoder + formatting
+
+# Also run the chain against OpenWebRX+'s real csdr/owrx Python code:
+git clone --depth 1 https://github.com/luarvique/openwebrx /tmp/owrx
+OWRX_SRC=/tmp/owrx python -m pytest tests/
+```
+
+`tests/test_chain.py` feeds a loopback-encoded Horus packet through the real chain
+classes (pycsdr's C buffers are stubbed when it isn't installed) and checks the
+contract `owrx/dsp.py` and `owrx/service` rely on.
 
 ## SondeHub Amateur Integration
 
@@ -191,9 +237,9 @@ The uploader reads your station details from OpenWebRX's config:
 
 Telemetry is batched and uploaded every 2 seconds. No API key needed — SondeHub Amateur is a free community service. Decoded balloons will appear on the [SondeHub Amateur Tracker](https://amateur.sondehub.org/).
 
-## Telemetry Window
+## TELEM Window
 
-A live scrolling table with columns:
+Open it with the `TELEM` button. A live scrolling table with columns:
 
 | UTC | Callsign | Seq | Position | Alt (m) | SNR | Sensors |
 |-----|----------|-----|----------|---------|-----|---------|
@@ -204,7 +250,6 @@ A live scrolling table with columns:
 - Sensor data includes all standard fields plus v3 custom fields
 - Auto-scrolls and prunes to 200 rows for performance
 - Drag by the title bar, resize from the corner, close with ✕ — position and size persist across reloads
-- The window opens automatically on the first decoded frame, then respects your choice; use the `TELEM` button to reopen it
 - A status line shows the running frame count and the last payload/callsign received
 - `Clear` empties the table and resets the frame counter
 

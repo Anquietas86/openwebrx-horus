@@ -61,6 +61,41 @@ backup() {
     fi
 }
 
+# ── Re-patch helper ────────────────────────────────────────────────
+#
+# Strip any existing openwebrx-horus marker blocks before patching, so every
+# run inserts the CURRENT blocks rather than skipping a stale copy. This is
+# also what migrates installs from v4.0.2 and earlier, which named the modes
+# horus_binary / horus_rtty. OWRX+'s ModulationValidator only accepts
+# [a-z0-9-], so the browser rejected those names (the old regex "fix" never
+# matched upstream's source). The modes are now horus-binary / horus-rtty.
+
+strip_horus_blocks() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    grep -q "$MARKER" "$f" || return 0
+    python3 - "$f" "$MARKER" <<'PYEOF'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+with open(path) as fh:
+    lines = fh.readlines()
+out, skipping = [], False
+for line in lines:
+    s = line.strip()
+    if s == marker + " BEGIN":
+        skipping = True
+        continue
+    if s == marker + " END":
+        skipping = False
+        continue
+    if not skipping:
+        out.append(line)
+with open(path, "w") as fh:
+    fh.writelines(out)
+PYEOF
+    info "Cleared previous horus patch from $f"
+}
+
 # ── Uninstall ───────────────────────────────────────────────────────
 
 if $UNINSTALL; then
@@ -215,8 +250,9 @@ fi
 # ── Install: patch modes.py ─────────────────────────────────────────
 
 MODES_FILE="$OWRX/owrx/modes.py"
+strip_horus_blocks "$MODES_FILE"
 
-if grep -q "horus_binary" "$MODES_FILE"; then
+if grep -q "horus-binary" "$MODES_FILE"; then
     info "modes.py already patched, skipping"
 else
     backup "$MODES_FILE"
@@ -246,21 +282,25 @@ for i in range(len(lines) - 1, -1, -1):
 if insert_idx is not None:
     new_modes = '''        {marker} BEGIN
         DigitalMode(
-            modulation="horus_binary",
+            modulation="horus-binary",
             name="Horus Binary",
             underlying=["usb"],
             bandpass=Bandpass(100, 4000),
+            ifRate=48000,
             requirements=["horusdemodlib"],
             service=True,
             squelch=False,
+            secondaryFft=False,
         ),
         DigitalMode(
-            modulation="horus_rtty",
+            modulation="horus-rtty",
             name="Horus RTTY",
             underlying=["usb"],
             bandpass=Bandpass(300, 3000),
+            ifRate=48000,
             requirements=["horusdemodlib"],
             service=True,
+            secondaryFft=False,
         ),
         {marker} END'''.format(marker=marker)
 
@@ -275,8 +315,9 @@ fi
 # ── Install: patch service/__init__.py ──────────────────────────────
 
 SERVICE_FILE="$OWRX/owrx/service/__init__.py"
+strip_horus_blocks "$SERVICE_FILE"
 
-if grep -q "horus_binary" "$SERVICE_FILE"; then
+if grep -q "horus-binary" "$SERVICE_FILE"; then
     info "service/__init__.py already patched, skipping"
 else
     backup "$SERVICE_FILE"
@@ -304,12 +345,12 @@ for i, line in enumerate(lines):
 if raise_idx is not None:
     demod_lines = [
         indent + marker + " BEGIN",
-        indent + 'elif mod == "horus_binary":',
+        indent + 'elif mod == "horus-binary":',
         indent + '    from owrx.chain.horus import HorusDemodulatorChain',
-        indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
-        indent + 'elif mod == "horus_rtty":',
+        indent + '    return HorusDemodulatorChain(mode_str="horus-binary")',
+        indent + 'elif mod == "horus-rtty":',
         indent + '    from owrx.chain.horus import HorusDemodulatorChain',
-        indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+        indent + '    return HorusDemodulatorChain(mode_str="horus-rtty")',
         indent + marker + " END",
     ]
     for j, dl in enumerate(demod_lines):
@@ -482,39 +523,12 @@ fi
 # ── Install: patch dsp.py ──────────────────────────────────────────
 
 DSP_FILE="$OWRX/owrx/dsp.py"
+strip_horus_blocks "$DSP_FILE"
 
-# The ModulationValidator regex fix is idempotent and MUST run regardless of
-# whether the elif branches are already present. A prior partial patch can
-# leave the horus_binary elif branches in place while the regex fix is missing
-# (the old guard `grep -q 'horus_binary'` skipped the whole block in that case,
-# leaving `horus_binary` rejected by the validator → decoder never fires).
-# Apply the regex fix unconditionally first.
 backup "$DSP_FILE"
 
-python3 - "$DSP_FILE" <<'PYEOF'
-import sys
-
-path = sys.argv[1]
-
-with open(path, 'r') as f:
-    content = f.read()
-
-# Fix ModulationValidator regex to allow underscores for horus modulations.
-# Idempotent: only replaces if the old (underscore-less) pattern is present.
-old = '"^[a-z0-9\\-]+$"'
-new = '"^[a-z0-9_\\-]+$"'
-if old in content:
-    content = content.replace(old, new, 1)
-    print("regex fix applied")
-else:
-    print("regex fix already present (or pattern not found)")
-
-with open(path, 'w') as f:
-    f.write(content)
-PYEOF
-
 # Now add the Horus elif branches to _getSecondaryDemodulator() if not present.
-if grep -q 'horus_binary' "$DSP_FILE"; then
+if grep -q 'horus-binary' "$DSP_FILE"; then
     info "dsp.py elif branches already present, skipping"
 else
     python3 - "$DSP_FILE" <<'PYEOF'
@@ -537,12 +551,12 @@ for i, line in enumerate(lines):
 if insert_idx is not None:
     block = [
         indent + marker + " BEGIN",
-        indent + 'elif mod == "horus_binary":',
+        indent + 'elif mod == "horus-binary":',
         indent + '    from owrx.chain.horus import HorusDemodulatorChain',
-        indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
-        indent + 'elif mod == "horus_rtty":',
+        indent + '    return HorusDemodulatorChain(mode_str="horus-binary")',
+        indent + 'elif mod == "horus-rtty":',
         indent + '    from owrx.chain.horus import HorusDemodulatorChain',
-        indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+        indent + '    return HorusDemodulatorChain(mode_str="horus-rtty")',
         indent + marker + " END",
         "",
     ]

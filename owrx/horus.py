@@ -6,6 +6,7 @@ Decoded positions are plotted on the OpenWebRX map, reported to SondeHub
 Amateur, and displayed in a dedicated telemetry panel.
 """
 
+import array
 import json
 import logging
 import threading
@@ -14,7 +15,6 @@ from datetime import datetime, timezone
 from horusdemodlib.demod import HorusLib, Mode, Frame
 from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
-from horusdemodlib.utils import telem_to_sondehub
 
 try:
     from owrx.config import Config
@@ -66,8 +66,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 HORUS_MODES = {
-    "horus_binary": Mode.BINARY,
-    "horus_rtty": Mode.RTTY_7N2,
+    "horus-binary": Mode.BINARY,
+    "horus-rtty": Mode.RTTY_7N2,
 }
 
 HORUS_SAMPLE_RATE = 48000
@@ -111,7 +111,68 @@ def format_horus_telemetry(data: dict) -> dict:
                 out[name] = data[name]
         out["custom_field_names"] = data["custom_field_names"]
 
+    # Fields read by the stock OpenWebRX+ Packet panel (PacketMessagePanel),
+    # which the frontend plugin teaches to accept mode "Horus". The panel
+    # shows UTC | callsign | map link | comment, so everything else is folded
+    # into the comment. The map link opens /map?callsign=<source>, matching
+    # the key HorusParser.updateMap() plots under.
+    if "callsign" in data:
+        out["source"] = data["callsign"]
+    out["comment"] = _build_comment(data)
+
     return out
+
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _build_comment(data: dict) -> str:
+    """One-line telemetry summary for the stock Packet panel's comment column."""
+    parts = []
+    alt = _num(data.get("altitude"))
+    if alt is not None:
+        parts.append("Alt {:,.0f} m".format(alt))
+    asc = _num(data.get("ascent_rate"))
+    if asc is not None:
+        parts.append("{:+.1f} m/s".format(asc))
+    spd = _num(data.get("speed"))
+    if spd is not None:
+        parts.append("{:.0f} km/h".format(spd))
+    snr = _num(data.get("snr"))
+    if snr is not None:
+        parts.append("SNR {:.1f} dB".format(snr))
+    seq = data.get("sequence_number")
+    if seq is not None:
+        parts.append("#{}".format(seq))
+
+    temp = _num(data.get("temperature"))
+    if temp is not None:
+        parts.append("{:.1f}°C".format(temp))
+    hum = _num(data.get("humidity"))
+    if hum is not None:
+        parts.append("{:.0f}%RH".format(hum))
+    pres = _num(data.get("pressure"))
+    if pres is not None:
+        parts.append("{:.1f} hPa".format(pres))
+    batt = _num(data.get("battery_voltage"))
+    if batt is None:
+        batt = _num(data.get("battery"))
+    if batt is not None:
+        parts.append("{:.2f} V".format(batt))
+    sats = _num(data.get("sats"))
+    if sats is not None:
+        parts.append("{:d} sats".format(int(sats)))
+
+    for name in data.get("custom_field_names") or []:
+        val = data.get(name)
+        if val is None:
+            continue
+        if isinstance(val, float):
+            val = "{:.2f}".format(val)
+        parts.append("{}: {}".format(name, val))
+
+    return " · ".join(parts)
 
 
 class HorusSondehubUploader:
@@ -245,12 +306,11 @@ class HorusDemodulator:
     4FSK/RTTY modem, and emits decoded telemetry dicts via callback.
     """
 
-    def __init__(self, mode_str: str = "horus_binary", callback=None, sample_rate: int = None):
+    def __init__(self, mode_str: str = "horus-binary", callback=None, sample_rate: int = None):
         self.mode_str = mode_str
         self.callback = callback
         self._lock = threading.Lock()
         self._dial_freq = None
-        self._sample_count = 0
 
         rate = sample_rate or HORUS_SAMPLE_RATE
         lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
@@ -273,9 +333,26 @@ class HorusDemodulator:
 
     def process(self, audio_bytes: bytes):
         """Feed 16-bit signed PCM audio. Decoded frames arrive via callback."""
-        self._sample_count += len(audio_bytes) // 2
         with self._lock:
+            if self._demod is None:     # closed while a read was in flight
+                return
             self._demod.add_samples(audio_bytes)
+
+    def process_float(self, data) -> None:
+        """Feed native-endian float32 audio, as OpenWebRX's audio buffers hold it.
+
+        Each block is scaled to a 30000 peak and converted to s16 PCM for the
+        C modem. Per-block normalisation is fine for 4FSK: the modem estimates
+        tone amplitudes itself, and the upstream SSB chain already applies AGC.
+        """
+        floats = array.array("f")
+        floats.frombytes(bytes(data))
+        if not floats:
+            return
+        peak = max(max(floats), -min(floats))
+        scale = 30000.0 / peak if peak > 1e-6 else 0.0
+        pcm = array.array("h", (int(s * scale) for s in floats))
+        self.process(pcm.tobytes())
 
     def _handle_frame(self, frame: Frame):
         if not frame.crc_pass:

@@ -79,9 +79,9 @@ print("C. OpenWebRX demodulator wrapper (construct / feed / close)")
 print("=" * 68)
 try:
     from owrx.horus import HorusDemodulator, HORUS_MODES
-    check("HORUS_MODES mapping", HORUS_MODES.get("horus_binary") is not None,
+    check("HORUS_MODES mapping", HORUS_MODES.get("horus-binary") is not None,
           str({k: str(v) for k, v in HORUS_MODES.items()}))
-    for mode in ("horus_binary", "horus_rtty"):
+    for mode in ("horus-binary", "horus-rtty"):
         d = HorusDemodulator(mode_str=mode)
         ok = d._demod is not None
         d.close()
