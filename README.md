@@ -11,7 +11,6 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 - **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
 - **Stock Packet panel** — decoded frames appear in OpenWebRX+'s own Packet panel (UTC, callsign, map link, one-line telemetry summary), like APRS or radiosondes
 - **TELEM window** — an optional draggable, resizable floating window with the full table: callsign, sequence, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
-- **Metrics** — decode counts tracked per band
 
 ## Requirements
 
@@ -150,14 +149,24 @@ bookmark or background-decoding config** that used the old names.
 ## Architecture
 
 ```
-RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
+RF → csdr (tuning/filtering) → USB demod + AGC → 48 kHz float audio
+    → HorusModule (ThreadModule) → s16 PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
-    ├→ OpenWebRX map (via the server-side parser, on the /map window)
+    ├→ OpenWebRX map (server side, on the /map window)
     ├→ Stock Packet panel + optional TELEM window (browser)
     ├→ SondeHub Amateur (automatic upload)
-    └→ ReportingEngine (OpenWebRX spots)
 ```
+
+### Decoder chain (v4.1.0)
+
+`owrx/chain/horus.py` follows the same pattern as upstream's own Python-thread
+decoders (SSTV, Fax): a `ServiceDemodulator` chain that declares a fixed 48 kHz audio
+rate via `getFixedAudioRate()`, wrapping one `ThreadModule` that reads float audio and
+writes pickled telemetry dicts. The fixed rate is what lets OpenWebRX+ hand the modem
+48 kHz audio directly, in the browser and as a background service. v4.0.x returned
+`None` there, which crashed background decoding and forced a hand-rolled Python
+resampler on the browser path.
 
 ### Frontend (v4.1.0)
 
@@ -203,6 +212,21 @@ rebuilt panel list fails validation, because a malformed line here breaks the wh
 The remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
 registers a decoder (feature detection, mode definition, DSP chain wiring, service
 dispatch).
+
+## Tests
+
+```bash
+pip install horusdemodlib pytest
+python -m pytest tests/                      # decoder + formatting
+
+# Also run the chain against OpenWebRX+'s real csdr/owrx Python code:
+git clone --depth 1 https://github.com/luarvique/openwebrx /tmp/owrx
+OWRX_SRC=/tmp/owrx python -m pytest tests/
+```
+
+`tests/test_chain.py` feeds a loopback-encoded Horus packet through the real chain
+classes (pycsdr's C buffers are stubbed when it isn't installed) and checks the
+contract `owrx/dsp.py` and `owrx/service` rely on.
 
 ## SondeHub Amateur Integration
 

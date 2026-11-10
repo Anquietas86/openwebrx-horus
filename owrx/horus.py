@@ -6,6 +6,7 @@ Decoded positions are plotted on the OpenWebRX map, reported to SondeHub
 Amateur, and displayed in a dedicated telemetry panel.
 """
 
+import array
 import json
 import logging
 import threading
@@ -14,7 +15,6 @@ from datetime import datetime, timezone
 from horusdemodlib.demod import HorusLib, Mode, Frame
 from horusdemodlib.decoder import decode_packet
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
-from horusdemodlib.utils import telem_to_sondehub
 
 try:
     from owrx.config import Config
@@ -311,7 +311,6 @@ class HorusDemodulator:
         self.callback = callback
         self._lock = threading.Lock()
         self._dial_freq = None
-        self._sample_count = 0
 
         rate = sample_rate or HORUS_SAMPLE_RATE
         lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
@@ -334,9 +333,26 @@ class HorusDemodulator:
 
     def process(self, audio_bytes: bytes):
         """Feed 16-bit signed PCM audio. Decoded frames arrive via callback."""
-        self._sample_count += len(audio_bytes) // 2
         with self._lock:
+            if self._demod is None:     # closed while a read was in flight
+                return
             self._demod.add_samples(audio_bytes)
+
+    def process_float(self, data) -> None:
+        """Feed native-endian float32 audio, as OpenWebRX's audio buffers hold it.
+
+        Each block is scaled to a 30000 peak and converted to s16 PCM for the
+        C modem. Per-block normalisation is fine for 4FSK: the modem estimates
+        tone amplitudes itself, and the upstream SSB chain already applies AGC.
+        """
+        floats = array.array("f")
+        floats.frombytes(bytes(data))
+        if not floats:
+            return
+        peak = max(max(floats), -min(floats))
+        scale = 30000.0 / peak if peak > 1e-6 else 0.0
+        pcm = array.array("h", (int(s * scale) for s in floats))
+        self.process(pcm.tobytes())
 
     def _handle_frame(self, frame: Frame):
         if not frame.crc_pass:
