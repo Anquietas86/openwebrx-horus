@@ -1,0 +1,50 @@
+name: CI
+
+# Runs the unit tests, the chain test and the installer test against the
+# latest OpenWebRX+ (luarvique/openwebrx master). The nightly run is what
+# catches an upstream release breaking the patches before a launch does.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 18 * * *"   # daily, 04:47 Adelaide (ACDT)
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Fetch latest OpenWebRX+
+        run: |
+          git clone --depth 1 https://github.com/luarvique/openwebrx "$RUNNER_TEMP/owrx"
+          echo "OpenWebRX+ commit: $(git -C "$RUNNER_TEMP/owrx" log -1 --format='%h %cd %s')"
+
+      - name: Install dependencies
+        run: python -m pip install horusdemodlib pytest setuptools numpy
+
+      - name: Shell syntax
+        run: bash -n install.sh install-docker.sh
+
+      - name: Tests
+        env:
+          OWRX_SRC: ${{ runner.temp }}/owrx
+        run: python -m pytest -v -p no:warnings tests/
+
+      - name: Install script end to end
+        run: |
+          mkdir -p "$RUNNER_TEMP/tree"
+          cp -r "$RUNNER_TEMP/owrx/owrx" "$RUNNER_TEMP/owrx/htdocs" "$RUNNER_TEMP/tree/"
+          PYTHON=python ./install.sh "$RUNNER_TEMP/tree"
+          PYTHON=python ./install.sh "$RUNNER_TEMP/tree"
+          PYTHON=python ./install.sh --uninstall "$RUNNER_TEMP/tree"

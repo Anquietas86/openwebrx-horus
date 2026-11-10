@@ -2,14 +2,17 @@
 OpenWebRX decoder module for Project Horus high-altitude balloon telemetry.
 
 Handles Horus Binary v1/v2/v3 (4FSK) and legacy RTTY via horusdemodlib.
-Decoded positions are plotted on the OpenWebRX map, reported to SondeHub
-Amateur, and displayed in a dedicated telemetry panel.
+Decoded positions are plotted on the OpenWebRX map, shown in the stock
+Packet panel (and the optional TELEM window), sent to the reporting engine
+(e.g. MQTT), and uploaded to SondeHub Amateur when SondeHub reporting is
+enabled in the OpenWebRX settings.
 """
 
 import array
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 from horusdemodlib.demod import HorusLib, Mode, Frame
@@ -20,17 +23,6 @@ try:
     from owrx.config import Config
 except ImportError:
     Config = None
-
-try:
-    from owrx.toolbox import TextParser
-except ImportError:
-    try:
-        from owrx.parser import TextParser
-    except ImportError:
-        # Standalone / testing: provide a minimal base class
-        class TextParser:
-            def __init__(self):
-                pass
 
 try:
     from owrx.map import Map, LatLngLocation
@@ -56,6 +48,11 @@ except ImportError:
     ReportingEngine = None
 
 try:
+    import numpy
+except ImportError:
+    numpy = None
+
+try:
     from owrx.bands import Bandplan
 except ImportError:
     try:
@@ -65,16 +62,35 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Mode name -> horusdemodlib modem mode. Names must match [a-z0-9-] (OWRX+'s
+# ModulationValidator). horus-rtty keeps the common 7N2 framing; the other
+# RTTY framings are separate modes so each profile can pick its payload's.
 HORUS_MODES = {
     "horus-binary": Mode.BINARY,
     "horus-rtty": Mode.RTTY_7N2,
+    "horus-rtty-7n1": Mode.RTTY_7N1,
+    "horus-rtty-8n2": Mode.RTTY_8N2,
 }
+
+# Display names, used by the installer when registering the modes.
+HORUS_MODE_NAMES = {
+    "horus-binary": "Horus Binary",
+    "horus-rtty": "Horus RTTY (7N2)",
+    "horus-rtty-7n1": "Horus RTTY (7N1)",
+    "horus-rtty-8n2": "Horus RTTY (8N2)",
+}
+
+# Fixed PCM gain for the C modem. OpenWebRX's USB chain applies AGC, so audio
+# arrives at roughly +/-1.0; this maps that to about half of s16 full scale
+# and leaves headroom before clipping. A fixed gain (rather than normalising
+# every block to its own peak) keeps the level steady across block edges.
+AUDIO_GAIN = 16384.0
 
 HORUS_SAMPLE_RATE = 48000
 
 # Keep in step with VERSION in plugin/horus/horus.js and the release tag.
 # Sent to SondeHub Amateur as software_version.
-PLUGIN_VERSION = "5.0.0"
+PLUGIN_VERSION = "5.1.0"
 
 
 def format_horus_telemetry(data: dict) -> dict:
@@ -122,6 +138,8 @@ def format_horus_telemetry(data: dict) -> dict:
     # the key HorusParser.updateMap() plots under.
     if "callsign" in data:
         out["source"] = data["callsign"]
+    if _num(data.get("f_centre")) is not None:
+        out["freq"] = int(data["f_centre"])
     out["comment"] = _build_comment(data)
 
     return out
@@ -179,12 +197,98 @@ def _build_comment(data: dict) -> str:
     return " · ".join(parts)
 
 
+class _RecentFrames:
+    """Remembers which (callsign, sequence) frames were already handled.
+
+    Every browser tuned to a Horus mode runs its own chain, and so does the
+    background decoder, so one transmitted frame can be decoded several times
+    by the same receiver. Uploads, spots and metrics should happen once per
+    frame; the map and the browser panels still see every copy.
+    """
+
+    def __init__(self, ttl: float = 600.0, max_entries: int = 2000):
+        self.ttl = ttl
+        self.max_entries = max_entries
+        self._seen = {}
+        self._lock = threading.Lock()
+
+    def first_time(self, telemetry: dict, now: float = None) -> bool:
+        callsign = telemetry.get("callsign")
+        seq = telemetry.get("sequence_number")
+        if callsign is None or seq is None:
+            return True
+        now = time.monotonic() if now is None else now
+        key = (str(callsign), seq)
+        with self._lock:
+            last = self._seen.get(key)
+            if last is not None and now - last < self.ttl:
+                return False
+            self._seen[key] = now
+            if len(self._seen) > self.max_entries:
+                cutoff = now - self.ttl
+                self._seen = {k: t for k, t in self._seen.items() if t >= cutoff}
+            return True
+
+
+_recent_frames = _RecentFrames()
+
+
+def is_new_frame(telemetry: dict) -> bool:
+    return _recent_frames.first_time(telemetry)
+
+
+# OpenWebRX+'s own SondeHub settings (Settings > Reporting > "Sondehub
+# settings"). Upstream uses them for radiosondes; the plugin honours the same
+# switch, callsign and antenna for SondeHub Amateur so there is one place to
+# turn SondeHub reporting on or off.
+SONDEHUB_CONFIG_KEYS = (
+    "sondehub_enabled", "sondehub_callsign", "sondehub_antenna",
+    "receiver_gps", "receiver_asl",
+)
+
+
+def _cfg(pm, key, default=None):
+    try:
+        return pm[key] if key in pm else default
+    except Exception:
+        return default
+
+
+def sondehub_station_settings(pm):
+    """Uploader settings from the OpenWebRX config, or None when disabled.
+
+    Mirrors upstream's SondehubReporter: reporting needs sondehub_enabled and a
+    real sondehub_callsign (empty or N0CALL means off). Altitude comes from
+    receiver_asl; receiver_gps only holds lat/lon.
+    """
+    if not _cfg(pm, "sondehub_enabled", False):
+        return None
+    callsign = _cfg(pm, "sondehub_callsign")
+    callsign = str(callsign).strip() if callsign else ""
+    if not callsign or callsign.upper() == "N0CALL":
+        return None
+
+    gps = _cfg(pm, "receiver_gps")
+    lat = _cfg(gps, "lat", 0.0) if gps is not None else 0.0
+    lon = _cfg(gps, "lon", 0.0) if gps is not None else 0.0
+    asl = _cfg(pm, "receiver_asl", 0) or 0
+    position = (float(lat), float(lon), float(asl)) if (lat or lon) else None
+
+    antenna = _cfg(pm, "sondehub_antenna") or ""
+    return {
+        "callsign": callsign,
+        "position": position,
+        "antenna": str(antenna),
+    }
+
+
 class HorusSondehubUploader:
     """
     Singleton manager for the SondeHub Amateur uploader.
 
-    Reads station config from OpenWebRX settings (receiver_gps, receiver_callsign)
-    and maintains the background upload thread from horusdemodlib.
+    Follows OpenWebRX+'s SondeHub settings (see sondehub_station_settings) and
+    rebuilds the horusdemodlib uploader whenever they change, so turning
+    reporting on/off or changing the callsign needs no restart.
     """
 
     _instance = None
@@ -200,61 +304,85 @@ class HorusSondehubUploader:
 
     def __init__(self):
         self._uploader = None
-        self._started = False
-        self._init_uploader()
-
-    def _init_uploader(self):
+        self._settings = None
+        self._uploader_lock = threading.Lock()
+        self._config_sub = None
+        if Config is None:
+            logger.warning("OpenWebRX Config not available; SondeHub upload disabled")
+            return
+        self.apply_config()
         try:
-            if Config is None:
-                logger.warning("OpenWebRX Config not available — SondeHub uploader disabled")
-                return
-            pm = Config.get()
-            callsign = pm["receiver_callsign"] if "receiver_callsign" in pm else "N0CALL"
-            gps = pm["receiver_gps"] if "receiver_gps" in pm else {}
-            lat = gps.get("lat", 0.0) if isinstance(gps, dict) else getattr(gps, "lat", 0.0)
-            lon = gps.get("lon", 0.0) if isinstance(gps, dict) else getattr(gps, "lon", 0.0)
-            alt = gps.get("alt", 0) if isinstance(gps, dict) else getattr(gps, "alt", 0)
-
-            position = (lat, lon, alt) if lat != 0 or lon != 0 else None
-            antenna = pm["receiver_antenna"] if "receiver_antenna" in pm else "Unknown"
-
-            self._uploader = SondehubAmateurUploader(
-                upload_rate=2,
-                user_callsign=str(callsign),
-                user_position=position,
-                user_radio="OpenWebRX",
-                user_antenna=str(antenna),
-                software_name="openwebrx-horus",
-                software_version=PLUGIN_VERSION,
-                inhibit=False,
-            )
-            self._started = True
-            logger.info(
-                "SondeHub Amateur uploader started: callsign=%s", callsign
-            )
+            self._config_sub = Config.get().filter(*SONDEHUB_CONFIG_KEYS).wire(self.apply_config)
         except Exception:
-            logger.exception("Failed to start SondeHub Amateur uploader")
-            self._uploader = None
+            logger.debug("Could not subscribe to SondeHub config changes", exc_info=True)
+
+    def apply_config(self, *args):
+        try:
+            settings = sondehub_station_settings(Config.get())
+        except Exception:
+            logger.exception("Failed to read SondeHub settings")
+            settings = None
+
+        with self._uploader_lock:
+            if settings == self._settings and (settings is None) == (self._uploader is None):
+                return
+            self._close_uploader()
+            self._settings = settings
+            if settings is None:
+                logger.info(
+                    "SondeHub Amateur upload is off (enable it and set a callsign "
+                    "under Settings > Reporting > Sondehub settings)"
+                )
+                return
+            try:
+                self._uploader = SondehubAmateurUploader(
+                    upload_rate=2,
+                    user_callsign=settings["callsign"],
+                    user_position=settings["position"],
+                    user_radio="OpenWebRX",
+                    user_antenna=settings["antenna"],
+                    software_name="openwebrx-horus",
+                    software_version=PLUGIN_VERSION,
+                    inhibit=False,
+                )
+                logger.info("SondeHub Amateur uploader started: callsign=%s", settings["callsign"])
+            except Exception:
+                logger.exception("Failed to start SondeHub Amateur uploader")
+                self._uploader = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._uploader is not None
 
     def upload(self, telemetry: dict):
-        if not self._uploader:
+        with self._uploader_lock:
+            uploader = self._uploader
+        if uploader is None:
             return
-
         try:
-            # Pass raw telemetry directly — SondehubAmateurUploader.add()
-            # calls telem_to_sondehub() internally in its background thread.
-            self._uploader.add(telemetry)
+            # SondehubAmateurUploader.add() runs telem_to_sondehub() itself.
+            uploader.add(telemetry)
         except Exception:
             logger.debug("SondeHub upload prep failed", exc_info=True)
 
-    def close(self):
-        if self._uploader:
+    def _close_uploader(self):
+        if self._uploader is not None:
             try:
                 self._uploader.close()
             except Exception:
                 pass
             self._uploader = None
-            self._started = False
+
+    def close(self):
+        if self._config_sub is not None:
+            try:
+                self._config_sub.cancel()
+            except Exception:
+                pass
+            self._config_sub = None
+        with self._uploader_lock:
+            self._close_uploader()
+            self._settings = None
         # Reset singleton so a new instance can be created on next use
         HorusSondehubUploader._instance = None
 
@@ -317,9 +445,9 @@ class HorusDemodulator:
         self._dial_freq = None
 
         rate = sample_rate or HORUS_SAMPLE_RATE
-        lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
+        self.lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
         self._demod = HorusLib(
-            mode=lib_mode,
+            mode=self.lib_mode,
             sample_rate=rate,
             stereo_iq=False,
             verbose=False,
@@ -345,18 +473,42 @@ class HorusDemodulator:
     def process_float(self, data) -> None:
         """Feed native-endian float32 audio, as OpenWebRX's audio buffers hold it.
 
-        Each block is scaled to a 30000 peak and converted to s16 PCM for the
-        C modem. Per-block normalisation is fine for 4FSK: the modem estimates
-        tone amplitudes itself, and the upstream SSB chain already applies AGC.
+        Converted to s16 PCM for the C modem with a fixed gain (AUDIO_GAIN)
+        and hard clipping.
         """
-        floats = array.array("f")
-        floats.frombytes(bytes(data))
-        if not floats:
+        raw = bytes(data)
+        if not raw:
             return
-        peak = max(max(floats), -min(floats))
-        scale = 30000.0 / peak if peak > 1e-6 else 0.0
-        pcm = array.array("h", (int(s * scale) for s in floats))
-        self.process(pcm.tobytes())
+        if numpy is not None:
+            floats = numpy.frombuffer(raw, dtype=numpy.float32)
+            pcm = numpy.clip(floats * AUDIO_GAIN, -32767, 32767).astype(numpy.int16).tobytes()
+        else:
+            floats = array.array("f")
+            floats.frombytes(raw)
+            g = AUDIO_GAIN
+            pcm = array.array(
+                "h", (int(max(-32767.0, min(32767.0, x * g))) for x in floats)
+            ).tobytes()
+        self.process(pcm)
+
+    def _tone_offset(self, frame: Frame):
+        """Mean of the modem's tone frequency estimates, in Hz of audio.
+
+        With USB, signal frequency = dial frequency + audio offset, which is
+        what SondeHub expects as the payload frequency.
+        """
+        stats = getattr(frame, "extended_stats", None)
+        if stats is None:
+            return None
+        tones = 4 if self.lib_mode == Mode.BINARY else 2
+        try:
+            est = [float(stats.f_est[i]) for i in range(tones)]
+        except Exception:
+            return None
+        est = [f for f in est if f > 0]
+        if len(est) != tones:
+            return None
+        return sum(est) / tones
 
     def _handle_frame(self, frame: Frame):
         if not frame.crc_pass:
@@ -382,11 +534,11 @@ class HorusDemodulator:
         # horusdemodlib's telem_to_sondehub requires a 'time' field.
         # v1 packets don't include it; v2/v3 do. Fall back to UTC now.
         if "time" not in telemetry:
-            from datetime import datetime, timezone
             telemetry["time"] = datetime.now(timezone.utc).strftime("%H:%M:%S")
 
         if self._dial_freq:
-            telemetry["f_centre"] = self._dial_freq
+            offset = self._tone_offset(frame)
+            telemetry["f_centre"] = int(round(self._dial_freq + (offset or 0)))
 
         logger.info(
             "Horus decode: %s seq=%s lat=%.5f lon=%.5f alt=%dm SNR=%.1fdB",
@@ -397,11 +549,6 @@ class HorusDemodulator:
             telemetry.get("altitude", 0),
             frame.snr,
         )
-
-        try:
-            HorusSondehubUploader.getSharedInstance().upload(telemetry)
-        except Exception:
-            logger.debug("SondeHub upload failed", exc_info=True)
 
         if self.callback:
             self.callback(telemetry)
@@ -415,59 +562,84 @@ class HorusDemodulator:
                 self._demod = None
 
 
-class HorusParser(TextParser):
+class HorusParser:
     """
-    OpenWebRX parser for Horus telemetry.
+    Server-side handling of decoded Horus telemetry.
 
-    Receives decoded telemetry dicts (as JSON bytes from the chain),
-    updates the map, reports to the reporting engine, and tracks metrics.
+    HorusModule (owrx/chain/horus.py) hands every CRC-valid frame to
+    handle(), which plots it on the map and, once per transmitted frame
+    across all chains on this receiver, uploads it to SondeHub Amateur,
+    counts it in the owrx.horus.decodes.<band> metric and sends it to the
+    reporting engine (e.g. MQTT, under <topic>/Horus).
     """
 
     def __init__(self, service=False):
-        super().__init__()
+        # Deliberately not an owrx TextParser: that is a LineBasedModule (a
+        # thread with csdr buffers). Decoding already happens in HorusModule,
+        # so this is a plain helper it calls directly.
         self.service = service
         self.band = None
         self.metric = None
+        self._update_metric()
 
     def setDialFrequency(self, frequency: int):
+        self.band = None
         if Bandplan is not None:
-            self.band = Bandplan.getSharedInstance().findBand(frequency)
+            try:
+                self.band = Bandplan.getSharedInstance().findBand(frequency)
+            except Exception:
+                self.band = None
         self._update_metric()
 
     def _update_metric(self):
         if Metrics is None or CounterMetric is None:
             return
-        band_name = self.band.getName() if self.band else "unknown"
-        metric_name = "owrx.horus.decodes.{band}".format(band=band_name)
-        metrics = Metrics.getSharedInstance()
-        self.metric = metrics.getMetric(metric_name)
-        if self.metric is None:
-            self.metric = CounterMetric()
-            metrics.addMetric(metric_name, self.metric)
+        try:
+            band_name = self.band.getName() if self.band else "unknown"
+            metric_name = "horus.decodes.{band}".format(band=band_name)
+            metrics = Metrics.getSharedInstance()
+            self.metric = metrics.getMetric(metric_name)
+            if self.metric is None:
+                self.metric = CounterMetric()
+                metrics.addMetric(metric_name, self.metric)
+        except Exception:
+            logger.debug("Horus metric setup failed", exc_info=True)
+            self.metric = None
+
+    def handle(self, telemetry: dict) -> dict:
+        """Process one decoded frame; returns the dict for the browser."""
+        try:
+            self.updateMap(telemetry, self.band)
+        except Exception:
+            logger.debug("Map update failed", exc_info=True)
+
+        out = format_horus_telemetry(telemetry)
+
+        if is_new_frame(telemetry):
+            try:
+                HorusSondehubUploader.getSharedInstance().upload(telemetry)
+            except Exception:
+                logger.debug("SondeHub upload failed", exc_info=True)
+            if self.metric is not None:
+                self.metric.inc()
+            if ReportingEngine is not None:
+                try:
+                    ReportingEngine.getSharedInstance().spot(out)
+                except Exception:
+                    logger.debug("Reporting spot failed", exc_info=True)
+        return out
 
     def parse(self, msg: bytes):
+        """JSON-bytes entry point, kept for anything feeding text frames."""
         try:
             data = json.loads(msg)
         except (json.JSONDecodeError, UnicodeDecodeError):
             logger.warning("Horus parser: invalid JSON input")
             return None
-
         if not data.get("crc_ok", False):
             return None
-
-        if self.metric:
-            self.metric.inc()
-
-        self.updateMap(data, self.band)
-
-        out = self._build_output(data)
-
-        if ReportingEngine is not None:
-            ReportingEngine.getSharedInstance().spot(out)
-
-        if self.service:
-            return None
-        return out
+        out = self.handle(data)
+        return None if self.service else out
 
     def _build_output(self, data: dict) -> dict:
         return format_horus_telemetry(data)

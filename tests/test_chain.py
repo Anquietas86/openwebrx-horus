@@ -142,7 +142,7 @@ class TestHorusChain(unittest.TestCase):
         self.assertEqual(chain.getFixedAudioRate(), 48000)
         self.assertIs(chain.getInputFormat(), Format.FLOAT)
         self.assertIs(chain.getOutputFormat(), Format.CHAR)
-        self.assertFalse(chain.isSecondaryFftShown())
+        self.assertTrue(chain.isSecondaryFftShown())
         chain.stop()
 
     def test_decodes_audio_through_the_chain(self):
@@ -180,6 +180,42 @@ class TestHorusChain(unittest.TestCase):
         self.assertAlmostEqual(msg["lon"], 138.6007, places=3)
         self.assertIn("comment", msg)
         self.assertEqual(msg["source"], msg["callsign"])
+        # Signal frequency = USB dial + the modem's tone centre (the loopback
+        # audio is centred on 1500 Hz).
+        self.assertAlmostEqual(msg["freq"], 434200000 + 1500, delta=50)
+
+    def test_service_chain_writes_nothing(self):
+        """In background mode the chain handles frames itself (map, uploads,
+        spots) and must not push browser messages into the output buffer."""
+        from pycsdr.modules import Buffer
+        from pycsdr.types import Format
+
+        handled = threading.Event()
+        written = []
+
+        class Sink:
+            def write(self, data):
+                written.append(data)
+
+        chain = self.Chain("horus-binary", service=True)
+        orig = chain.module.parser.handle
+
+        def handle(t):
+            out = orig(t)
+            handled.set()
+            return out
+
+        chain.module.parser.handle = handle
+        chain.setDialFrequency(434200000)
+        audio_in = Buffer(Format.FLOAT)
+        chain.setReader(audio_in.getReader())
+        chain.setWriter(Sink())
+        audio = _horus_audio()
+        for i in range(0, len(audio), 1024):
+            audio_in.write(audio[i:i + 1024].tobytes())
+        self.assertTrue(handled.wait(10), "no frame decoded")
+        chain.stop()
+        self.assertEqual(written, [])
 
     def test_service_resampler_never_below_modem_rate(self):
         """Background decoding groups nearby dials behind a Resampler whose
@@ -190,8 +226,9 @@ class TestHorusChain(unittest.TestCase):
         tree = tempfile.mkdtemp(prefix="owrx-horus-modes-")
         try:
             shutil.copytree(os.path.join(OWRX_SRC, "owrx"), os.path.join(tree, "owrx"))
+            shutil.copytree(os.path.join(OWRX_SRC, "htdocs"), os.path.join(tree, "htdocs"))
             subprocess.run(
-                [sys.executable, os.path.join(REPO, "docker-patch.py"), tree],
+                [sys.executable, os.path.join(REPO, "horus_patch.py"), "install", tree],
                 check=True, capture_output=True,
             )
             out = subprocess.run(
@@ -205,7 +242,7 @@ class TestHorusChain(unittest.TestCase):
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-        self.assertEqual(len(out), 2, "both Horus modes registered")
+        self.assertEqual(len(out), 4, "all Horus modes registered")
         for bw in map(float, out):
             # Worst case: a lone dial in a group (upstream floors at 25 kHz).
             self.assertGreaterEqual(max(bw * 1.15, 25000), 48000)
