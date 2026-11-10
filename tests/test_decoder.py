@@ -52,6 +52,17 @@ class TestModeNames(unittest.TestCase):
             self.assertRegex(name, pattern)
 
 
+class TestVersion(unittest.TestCase):
+    def test_frontend_and_backend_versions_match(self):
+        import os, re
+        from owrx.horus import PLUGIN_VERSION
+        js = os.path.join(os.path.dirname(__file__), "..", "plugin", "horus", "horus.js")
+        with open(js) as f:
+            m = re.search(r"var VERSION\s*=\s*'([^']+)'", f.read())
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), PLUGIN_VERSION)
+
+
 class TestHorusDecoder(unittest.TestCase):
     """Test packet decoding against known-good test vectors."""
 

@@ -1,5 +1,5 @@
 /**
- * OpenWebRX+ Horus Telemetry plugin — v4.1.0
+ * OpenWebRX+ Horus Telemetry plugin — v5.0.0
  *
  * Built on the official plugin JS API (htdocs/lib/Plugins.js, OpenWebRX+
  * 1.2.124+). No framework source is patched.
@@ -43,7 +43,7 @@
 
     var WINDOW_ID  = 'horus';
     var TITLE      = 'Horus Telemetry';
-    var VERSION    = '4.1.0';
+    var VERSION    = '5.0.0';
     var MAX_ROWS   = 200;
 
     var win = null, scrollEl = null, tbody = null, statusEl = null;

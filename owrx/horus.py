@@ -72,6 +72,10 @@ HORUS_MODES = {
 
 HORUS_SAMPLE_RATE = 48000
 
+# Keep in step with VERSION in plugin/horus/horus.js and the release tag.
+# Sent to SondeHub Amateur as software_version.
+PLUGIN_VERSION = "5.0.0"
+
 
 def format_horus_telemetry(data: dict) -> dict:
     """Format decoded Horus telemetry for frontend display.
@@ -221,7 +225,7 @@ class HorusSondehubUploader:
                 user_radio="OpenWebRX",
                 user_antenna=str(antenna),
                 software_name="openwebrx-horus",
-                software_version="1.0.0",
+                software_version=PLUGIN_VERSION,
                 inhibit=False,
             )
             self._started = True
