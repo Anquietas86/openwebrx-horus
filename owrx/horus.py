@@ -111,7 +111,68 @@ def format_horus_telemetry(data: dict) -> dict:
                 out[name] = data[name]
         out["custom_field_names"] = data["custom_field_names"]
 
+    # Fields read by the stock OpenWebRX+ Packet panel (PacketMessagePanel),
+    # which the frontend plugin teaches to accept mode "Horus". The panel
+    # shows UTC | callsign | map link | comment, so everything else is folded
+    # into the comment. The map link opens /map?callsign=<source>, matching
+    # the key HorusParser.updateMap() plots under.
+    if "callsign" in data:
+        out["source"] = data["callsign"]
+    out["comment"] = _build_comment(data)
+
     return out
+
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _build_comment(data: dict) -> str:
+    """One-line telemetry summary for the stock Packet panel's comment column."""
+    parts = []
+    alt = _num(data.get("altitude"))
+    if alt is not None:
+        parts.append("Alt {:,.0f} m".format(alt))
+    asc = _num(data.get("ascent_rate"))
+    if asc is not None:
+        parts.append("{:+.1f} m/s".format(asc))
+    spd = _num(data.get("speed"))
+    if spd is not None:
+        parts.append("{:.0f} km/h".format(spd))
+    snr = _num(data.get("snr"))
+    if snr is not None:
+        parts.append("SNR {:.1f} dB".format(snr))
+    seq = data.get("sequence_number")
+    if seq is not None:
+        parts.append("#{}".format(seq))
+
+    temp = _num(data.get("temperature"))
+    if temp is not None:
+        parts.append("{:.1f}°C".format(temp))
+    hum = _num(data.get("humidity"))
+    if hum is not None:
+        parts.append("{:.0f}%RH".format(hum))
+    pres = _num(data.get("pressure"))
+    if pres is not None:
+        parts.append("{:.1f} hPa".format(pres))
+    batt = _num(data.get("battery_voltage"))
+    if batt is None:
+        batt = _num(data.get("battery"))
+    if batt is not None:
+        parts.append("{:.2f} V".format(batt))
+    sats = _num(data.get("sats"))
+    if sats is not None:
+        parts.append("{:d} sats".format(int(sats)))
+
+    for name in data.get("custom_field_names") or []:
+        val = data.get(name)
+        if val is None:
+            continue
+        if isinstance(val, float):
+            val = "{:.2f}".format(val)
+        parts.append("{}: {}".format(name, val))
+
+    return " · ".join(parts)
 
 
 class HorusSondehubUploader:

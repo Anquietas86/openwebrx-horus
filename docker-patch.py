@@ -186,6 +186,7 @@ def patch_modes(content):
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
         "            squelch=False,\n"
+        "            secondaryFft=False,\n"
         "        ),\n"
         "        DigitalMode(\n"
         '            modulation="horus-rtty",\n'
@@ -194,6 +195,7 @@ def patch_modes(content):
         "            bandpass=Bandpass(300, 3000),\n"
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
+        "            secondaryFft=False,\n"
         "        ),\n"
         "        {m} END"
     ).format(m=m)

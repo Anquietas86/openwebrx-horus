@@ -103,6 +103,18 @@ class TestHorusDecoder(unittest.TestCase):
         self.assertEqual(out["battery"], 3.7)
         self.assertIn("timestamp", out)
 
+        # Fields for the stock OpenWebRX+ Packet panel
+        self.assertEqual(out["source"], "VK5ARG")
+        self.assertEqual(
+            out["comment"],
+            "Alt 30,000 m · SNR 12.5 dB · #42 · 23.5°C · 3.70 V",
+        )
+
+    def test_comment_skips_non_numeric_fields(self):
+        from owrx.horus import format_horus_telemetry
+        out = format_horus_telemetry({"callsign": "X", "altitude": "bad", "snr": None})
+        self.assertEqual(out["comment"], "")
+
     def test_output_format_v3_custom_fields(self):
         """Verify v3 custom fields are passed through."""
         mock_data = {

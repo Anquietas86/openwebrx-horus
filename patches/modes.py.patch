@@ -11,6 +11,7 @@ DigitalMode(
     requirements=["horusdemodlib"],
     service=True,
     squelch=False,
+    secondaryFft=False,
 ),
 DigitalMode(
     modulation="horus-rtty",
@@ -19,4 +20,5 @@ DigitalMode(
     bandpass=Bandpass(300, 3000),
     requirements=["horusdemodlib"],
     service=True,
+    secondaryFft=False,
 ),

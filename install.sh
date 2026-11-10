@@ -61,19 +61,19 @@ backup() {
     fi
 }
 
-# ── Legacy cleanup helper ──────────────────────────────────────────
+# ── Re-patch helper ────────────────────────────────────────────────
 #
-# Releases up to v4.0.2 named the modes horus_binary / horus_rtty. OWRX+'s
-# ModulationValidator only accepts [a-z0-9-], so the browser rejected those
-# names (the regex "fix" meant to allow underscores never matched upstream's
-# source). The modes are now horus-binary / horus-rtty, which need no
-# validator patch. Strip any old underscore-named marker blocks so the new
-# ones are inserted cleanly instead of sitting next to stale copies.
+# Strip any existing openwebrx-horus marker blocks before patching, so every
+# run inserts the CURRENT blocks rather than skipping a stale copy. This is
+# also what migrates installs from v4.0.2 and earlier, which named the modes
+# horus_binary / horus_rtty. OWRX+'s ModulationValidator only accepts
+# [a-z0-9-], so the browser rejected those names (the old regex "fix" never
+# matched upstream's source). The modes are now horus-binary / horus-rtty.
 
-strip_legacy_blocks() {
+strip_horus_blocks() {
     local f="$1"
     [[ -f "$f" ]] || return 0
-    grep -q 'horus_binary\|horus_rtty' "$f" || return 0
+    grep -q "$MARKER" "$f" || return 0
     python3 - "$f" "$MARKER" <<'PYEOF'
 import sys
 path, marker = sys.argv[1], sys.argv[2]
@@ -93,7 +93,7 @@ for line in lines:
 with open(path, "w") as fh:
     fh.writelines(out)
 PYEOF
-    info "Removed legacy horus_binary/horus_rtty patch from $f"
+    info "Cleared previous horus patch from $f"
 }
 
 # ── Uninstall ───────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ fi
 # ── Install: patch modes.py ─────────────────────────────────────────
 
 MODES_FILE="$OWRX/owrx/modes.py"
-strip_legacy_blocks "$MODES_FILE"
+strip_horus_blocks "$MODES_FILE"
 
 if grep -q "horus-binary" "$MODES_FILE"; then
     info "modes.py already patched, skipping"
@@ -289,6 +289,7 @@ if insert_idx is not None:
             requirements=["horusdemodlib"],
             service=True,
             squelch=False,
+            secondaryFft=False,
         ),
         DigitalMode(
             modulation="horus-rtty",
@@ -297,6 +298,7 @@ if insert_idx is not None:
             bandpass=Bandpass(300, 3000),
             requirements=["horusdemodlib"],
             service=True,
+            secondaryFft=False,
         ),
         {marker} END'''.format(marker=marker)
 
@@ -311,7 +313,7 @@ fi
 # ── Install: patch service/__init__.py ──────────────────────────────
 
 SERVICE_FILE="$OWRX/owrx/service/__init__.py"
-strip_legacy_blocks "$SERVICE_FILE"
+strip_horus_blocks "$SERVICE_FILE"
 
 if grep -q "horus-binary" "$SERVICE_FILE"; then
     info "service/__init__.py already patched, skipping"
@@ -519,7 +521,7 @@ fi
 # ── Install: patch dsp.py ──────────────────────────────────────────
 
 DSP_FILE="$OWRX/owrx/dsp.py"
-strip_legacy_blocks "$DSP_FILE"
+strip_horus_blocks "$DSP_FILE"
 
 backup "$DSP_FILE"
 

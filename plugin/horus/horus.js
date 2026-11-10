@@ -1,59 +1,41 @@
 /**
- * OpenWebRX+ Horus Telemetry plugin — v4.0.2
+ * OpenWebRX+ Horus Telemetry plugin — v4.1.0
  *
- * Rewritten against the OFFICIAL plugin JS API shipped in OpenWebRX+ 1.2.124+
- * (htdocs/lib/Plugins.js): Plugins.addButton / addWindow / toggleWindow.
+ * Built on the official plugin JS API (htdocs/lib/Plugins.js, OpenWebRX+
+ * 1.2.124+). No framework source is patched.
  *
- * ── Why this is less than half the size of v3.0.0 ────────────────────────
+ * ── Two views of the same frames ─────────────────────────────────────────
  *
- * v3.0.0 was built for OpenWebRX+ ~1.2.110, before the plugin API existed.
- * It had to fight the framework's hardcoded panel-array route in
- * openwebrx.js, which required:
- *   - three redundant message-routing paths (jQuery widget stub +
- *     secondary_demod_push_data hook + a direct WebSocket listener)
- *   - duplicate-suppression, because those three paths delivered the same
- *     frame up to three times
- *   - a hand-built DOM panel with a hardcoded 619px width and per-cell
- *     inline styles
- *   - an invasive PATCH TO FRAMEWORK SOURCE (openwebrx.js) to inject
- *     'horus' into the hardcoded panel list — the reason a single syntax
- *     error anywhere used to kill the entire compiled bundle
+ * 1. The STOCK Packet panel (default). OpenWebRX+ has no API for registering
+ *    a new message panel, but its PacketMessagePanel already renders
+ *    UTC | callsign | map link | comment rows for APRS/AIS/SONDE. This
+ *    plugin wraps three prototype methods so it also:
+ *      - claims messages with mode "Horus" (supportsMessage),
+ *      - is shown while a horus-* mode is selected (DemodulatorPanel
+ *        .updatePanels, whose mode list is hardcoded upstream),
+ *      - links Horus callsigns to SondeHub Amateur (Utils.linkifyByMode).
+ *    The server fills in `source` and a one-line `comment` for it, and the
+ *    position link opens the real /map at the balloon's marker.
  *
- * Plugins.addWindow() creates a floating window OUTSIDE the framework's
- * panel container, so initPanels(), toggle_panel() and the CSS 3D transform
- * system never touch it. All of the above falls away, and we gain drag,
- * resize, close and position/size persistence (localStorage) for free.
+ * 2. The TELEM floating window (optional detail view): a full table with
+ *    separate Seq / SNR / Sensors columns, opened with the TELEM button.
+ *    It is fed from the same pushMessage hook. If the stock panel proves
+ *    good enough, this window can be deleted without touching (1).
  *
- * ── Message routing is now a SINGLE path ─────────────────────────────────
+ * ── Message routing ──────────────────────────────────────────────────────
  *
- * openwebrx.js routes a 'secondary_demod' message by asking each panel in a
- * hardcoded list whether it claims the message; if none do, it calls
- * secondary_demod_push_data(value). With 'horus' absent from that list
- * (this version no longer patches it in), our hook is the only consumer —
- * so one path, no duplicate delivery, no dedup requirement.
+ * openwebrx.js offers each secondary_demod message to a hardcoded list of
+ * panels and falls through to secondary_demod_push_data() if none claims it.
+ * With the Packet panel claiming "Horus", that is the single path. The
+ * secondary_demod_push_data hook is kept only as a fallback for a build
+ * where PacketMessagePanel is missing, so frames still reach the window.
  *
- *   case 'secondary_demod':
- *       var value = json['value'];
- *       var panels = [ ...built-in ids... ].map(...);
- *       panels.push($('#openwebrx-panel-js8-message').js8());
- *       if (!panels.some(p => p.supportsMessage(value) && (p.pushMessage(value), true)))
- *           secondary_demod_push_data(value);   // <-- our single path
+ * ── Panels that used to be force-hidden ──────────────────────────────────
  *
- * The plugin loader contract: Plugins.load('horus') (from plugins/receiver/
- * init.js) injects horus.js + horus.css, then awaits Plugins.horus.init().
- *
- * ── Map plotting was REMOVED in v4.0.2 ───────────────────────────────────
- *
- * v4.0.0/v4.0.1 carried code to plot the balloon on the OpenWebRX map by
- * reaching for a global `rx.map` or `map`. That never worked on OpenWebRX+
- * 1.2.125, and it failed SILENTLY: the MAP button opens /map in a SEPARATE
- * browsing context (<a href="map" target="openwebrx-map">), so neither
- * Leaflet nor the map instance exists on the page this plugin runs in.
- *
- * Balloon positions still reach the real map. The server-side parser calls
- * Map.getSharedInstance().updateLocation(...) on every fix, so the balloon
- * plots on the /map window with no help from this plugin. The dead code here
- * is therefore deleted rather than left implied-working.
+ * v4.0.x permanently wrapped toggle_panel to hide the ISM and digimodes
+ * panels for EVERY mode, breaking other decoders. The empty digimodes box is
+ * now suppressed the supported way, server-side, with secondaryFft=False on
+ * the Horus mode definitions.
  */
 
 (function () {
@@ -61,23 +43,13 @@
 
     var WINDOW_ID  = 'horus';
     var TITLE      = 'Horus Telemetry';
-    var VERSION    = '4.0.2';
+    var VERSION    = '4.1.0';
     var MAX_ROWS   = 200;
-
-    // Framework panels suppressed while Horus telemetry is in use.
-    // OpenWebRX+ shows the ISM panel spuriously on some non-ISM modes, and the
-    // digimodes panel is redundant beside the telemetry window.
-    // Remove the 'digimodes' entry to let the 4FSK waterfall panel show.
-    var SUPPRESS = [
-        'openwebrx-panel-ism-message',
-        'openwebrx-panel-digimodes'
-    ];
 
     var win = null, scrollEl = null, tbody = null, statusEl = null;
     var pending = [];
     var seen = {};          // light duplicate guard: callsign:seq
     var frames = 0;
-    var autoShown = false;  // auto-open the window once per page load
 
     // ── small helpers ────────────────────────────────────────────────────
 
@@ -231,8 +203,7 @@
         var tr = document.createElement('tr');
         tr.innerHTML =
             '<td class="time">' + t + '</td>' +
-            '<td class="callsign"><a href="https://amateur.sondehub.org/#!mt=Mapnik&mz=9&qm=6_hours&q='
-              + encodeURIComponent(msg.callsign || '')
+            '<td class="callsign"><a href="' + sondehubUrl(msg.callsign)
               + '" target="_blank" rel="noopener">' + cs + '</a></td>' +
             '<td class="sequence">' + esc(sq) + '</td>' +
             '<td class="position">' + pos + '</td>' +
@@ -264,22 +235,83 @@
         if (key !== ':') seen[key] = true;
 
         renderRow(msg);
-
-        // Open the window automatically on the first frame of a page load,
-        // then respect the user's choice (they may have closed it on purpose).
-        if (!autoShown) {
-            autoShown = true;
-            Plugins.toggleWindow(WINDOW_ID, true);
-        }
     }
 
-    // ── message routing — the SINGLE path ────────────────────────────────
+    // ── stock Packet panel integration ───────────────────────────────────
 
-    function handle(msg) {
-        if (!msg || msg.mode !== 'Horus') return false;   // not ours
-        addRow(msg);
-        return true;                                      // claimed
+    function isHorus(msg) {
+        return !!msg && msg.mode === 'Horus';
     }
+
+    function isHorusModulation(mod) {
+        return typeof mod === 'string' && mod.indexOf('horus-') === 0;
+    }
+
+    function hookPacketPanel() {
+        if (window._horusPacketHooked) return true;
+        if (typeof PacketMessagePanel === 'undefined') return false;
+
+        var proto = PacketMessagePanel.prototype;
+        var origSupports = proto.supportsMessage;
+        var origPush = proto.pushMessage;
+
+        proto.supportsMessage = function (msg) {
+            return isHorus(msg) || origSupports.apply(this, arguments);
+        };
+        proto.pushMessage = function (msg) {
+            if (isHorus(msg)) addRow(msg);         // feed the TELEM window too
+            return origPush.apply(this, arguments);
+        };
+
+        window._horusPacketHooked = true;
+        console.log('[horus] stock Packet panel accepts Horus frames');
+        return true;
+    }
+
+    function hookPanelToggle() {
+        if (window._horusToggleHooked) return true;
+        if (typeof DemodulatorPanel === 'undefined' || typeof toggle_panel !== 'function')
+            return false;
+
+        var orig = DemodulatorPanel.prototype.updatePanels;
+        DemodulatorPanel.prototype.updatePanels = function () {
+            var ret = orig.apply(this, arguments);
+            // Upstream hides the Packet panel for any mode not in its
+            // hardcoded list; show it again while a Horus mode is selected.
+            try {
+                if (isHorusModulation(this.getDemodulator().get_secondary_demod()))
+                    toggle_panel('openwebrx-panel-packet-message', true);
+            } catch (e) { /* no demodulator yet */ }
+            return ret;
+        };
+        window._horusToggleHooked = true;
+
+        // A Horus mode may already be active (e.g. restored from the URL).
+        try { UI.getDemodulatorPanel().updatePanels(); } catch (e) {}
+        return true;
+    }
+
+    function hookLinkify() {
+        if (window._horusLinkHooked) return true;
+        if (typeof Utils === 'undefined' || typeof Utils.linkifyByMode !== 'function')
+            return false;
+
+        var orig = Utils.linkifyByMode;
+        Utils.linkifyByMode = function (mode, name) {
+            if (mode !== 'Horus') return orig.apply(this, arguments);
+            return '<a href="' + sondehubUrl(name) + '" target="_blank" rel="noopener">'
+                 + esc(name) + '</a>';
+        };
+        window._horusLinkHooked = true;
+        return true;
+    }
+
+    function sondehubUrl(callsign) {
+        return 'https://amateur.sondehub.org/#!mt=Mapnik&mz=9&qm=6_hours&q='
+             + encodeURIComponent(callsign || '');
+    }
+
+    // ── fallback routing (only if no panel claimed the frame) ────────────
 
     function hookRouting() {
         if (typeof secondary_demod_push_data !== 'function') return false;
@@ -287,31 +319,10 @@
 
         var orig = secondary_demod_push_data;
         window.secondary_demod_push_data = function (value) {
-            if (handle(value)) return;
+            if (isHorus(value)) { addRow(value); return; }
             return orig.apply(this, arguments);
         };
         window._horusRoutingHooked = true;
-        console.log('[horus] routing hooked via secondary_demod_push_data');
-        return true;
-    }
-
-    // ── suppress framework panels that are noise on a Horus profile ──────
-
-    function suppressPanels() {
-        if (window._horusPanelsSuppressed) return true;
-        if (typeof toggle_panel !== 'function') return false;
-
-        var orig = window.toggle_panel;
-        window.toggle_panel = function (what, on) {
-            if (on && SUPPRESS.indexOf(what) !== -1) return;
-            return orig.apply(this, arguments);
-        };
-        window._horusPanelsSuppressed = true;
-
-        for (var i = 0; i < SUPPRESS.length; i++) {
-            try { orig(SUPPRESS[i], false); } catch (e) {}
-        }
-        console.log('[horus] suppressed: ' + SUPPRESS.join(', '));
         return true;
     }
 
@@ -328,9 +339,11 @@
         _version: VERSION,
 
         init: function () {
-            poll(suppressPanels, 'toggle_panel');
-            poll(build,          'plugin window');
-            poll(hookRouting,    'secondary_demod_push_data');
+            poll(hookPacketPanel, 'PacketMessagePanel');
+            poll(hookPanelToggle, 'DemodulatorPanel');
+            poll(hookLinkify,     'Utils.linkifyByMode');
+            poll(hookRouting,     'secondary_demod_push_data');
+            poll(build,           'plugin window');
             poll(function () {
                 return !!Plugins.addButton(WINDOW_ID, 'TELEM', onButton, '#1f4e79');
             }, 'plugin button stack');

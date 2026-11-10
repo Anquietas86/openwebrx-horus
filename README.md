@@ -9,7 +9,8 @@ Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
 - **4FSK + RTTY demodulation** via horusdemodlib's C modem (CFFI)
 - **Auto-detection** of Horus Binary v1, v2, and v3 packet formats
 - **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
-- **Telemetry panel** — a draggable, resizable floating window showing callsign, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
+- **Stock Packet panel** — decoded frames appear in OpenWebRX+'s own Packet panel (UTC, callsign, map link, one-line telemetry summary), like APRS or radiosondes
+- **TELEM window** — an optional draggable, resizable floating window with the full table: callsign, sequence, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
 - **Metrics** — decode counts tracked per band
 
 ## Requirements
@@ -153,24 +154,36 @@ RF → csdr (tuning/filtering) → NFM demod → 48kHz 16-bit PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
     → decode_packet() → telemetry dict
     ├→ OpenWebRX map (via the server-side parser, on the /map window)
-    ├→ Telemetry window (official plugin API floating window)
+    ├→ Stock Packet panel + optional TELEM window (browser)
     ├→ SondeHub Amateur (automatic upload)
     └→ ReportingEngine (OpenWebRX spots)
 ```
 
-### Frontend (v4.0.0)
+### Frontend (v4.1.0)
 
-The telemetry display is a floating window created with `Plugins.addWindow()`, part
-of the official plugin JS API in OpenWebRX+ 1.2.124+. The API handles dragging,
-resizing, closing and position/size persistence (localStorage) — none of which the
-plugin has to implement. A `TELEM` button added with `Plugins.addButton()` shows and
-hides the window.
+OpenWebRX+ has no plugin API for registering a new *message panel* (the stock ones
+are hardcoded in `index.html`, `openwebrx.js` and `DemodulatorPanel.updatePanels()`).
+But the stock **Packet panel** already renders `UTC | callsign | map link | comment`
+rows, so the plugin reuses it by wrapping three prototype methods at runtime (no
+source patching):
 
-Message routing is a **single path**. `openwebrx.js` dispatches a `secondary_demod`
-message by offering it to each panel in a hardcoded list; when no panel claims it, it
-falls through to `secondary_demod_push_data()`. Since `horus` is deliberately *not* in
-that list, the plugin's hook on `secondary_demod_push_data` is the only consumer — so
-frames arrive exactly once.
+- `PacketMessagePanel.prototype.supportsMessage` also claims messages with mode `Horus`
+- `DemodulatorPanel.prototype.updatePanels` also shows the Packet panel while a
+  `horus-*` mode is selected
+- `Utils.linkifyByMode` links Horus callsigns to SondeHub Amateur
+
+The server fills in `source` and a one-line `comment` for each frame. The position
+pin opens the real OpenWebRX map at the balloon's marker.
+
+The **TELEM window** is a second, optional view built with `Plugins.addWindow()`
+(OpenWebRX+ 1.2.124+). It is fed from the same Packet panel hook, so frames still
+arrive exactly once. If the stock panel turns out to be enough, the window can be
+removed without touching the panel integration.
+
+The empty "digimodes" box OpenWebRX+ would otherwise show for a Horus mode is
+suppressed the supported way, with `secondaryFft=False` on the mode definitions.
+(v4.0.x hid it by wrapping `toggle_panel` globally, which also hid the ISM and
+digimodes panels for every other mode.)
 
 ### Framework patching
 
@@ -200,9 +213,9 @@ The uploader reads your station details from OpenWebRX's config:
 
 Telemetry is batched and uploaded every 2 seconds. No API key needed — SondeHub Amateur is a free community service. Decoded balloons will appear on the [SondeHub Amateur Tracker](https://amateur.sondehub.org/).
 
-## Telemetry Window
+## TELEM Window
 
-A live scrolling table with columns:
+Open it with the `TELEM` button. A live scrolling table with columns:
 
 | UTC | Callsign | Seq | Position | Alt (m) | SNR | Sensors |
 |-----|----------|-----|----------|---------|-----|---------|
@@ -213,7 +226,6 @@ A live scrolling table with columns:
 - Sensor data includes all standard fields plus v3 custom fields
 - Auto-scrolls and prunes to 200 rows for performance
 - Drag by the title bar, resize from the corner, close with ✕ — position and size persist across reloads
-- The window opens automatically on the first decoded frame, then respects your choice; use the `TELEM` button to reopen it
 - A status line shows the running frame count and the last payload/callsign received
 - `Clear` empties the table and resets the frame counter
 
