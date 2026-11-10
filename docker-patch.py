@@ -174,6 +174,15 @@ def patch_feature(content):
 
 
 def patch_modes(content):
+    """Add the Horus modes to Modes.mappings.
+
+    ifRate=48000 matters for background decoding: OpenWebRX+ groups nearby
+    service dials behind a Resampler whose rate comes from each mode's
+    get_bandwidth() (bandpass, or ifRate if larger). Without it a Horus dial
+    near other dials can land on a resampler slower than the modem's fixed
+    48 kHz; the Selector then cannot upsample, silently delivers audio at the
+    lower rate, and every frame fails CRC.
+    """
     m = MARKER
 
     new_modes = (
@@ -183,6 +192,7 @@ def patch_modes(content):
         '            name="Horus Binary",\n'
         '            underlying=["usb"],\n'
         "            bandpass=Bandpass(100, 4000),\n"
+        "            ifRate=48000,\n"
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
         "            squelch=False,\n"
@@ -193,6 +203,7 @@ def patch_modes(content):
         '            name="Horus RTTY",\n'
         '            underlying=["usb"],\n'
         "            bandpass=Bandpass(300, 3000),\n"
+        "            ifRate=48000,\n"
         '            requirements=["horusdemodlib"],\n'
         "            service=True,\n"
         "            secondaryFft=False,\n"

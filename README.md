@@ -216,7 +216,7 @@ dispatch).
 ## Tests
 
 ```bash
-pip install horusdemodlib pytest
+pip install horusdemodlib pytest setuptools
 python -m pytest tests/                      # decoder + formatting
 
 # Also run the chain against OpenWebRX+'s real csdr/owrx Python code:

@@ -8,7 +8,8 @@ OWRX_SRC, e.g.:
     OWRX_SRC=/tmp/owrx python -m pytest tests/test_chain.py
 
 pycsdr (the C extension) is replaced by small stand-ins when it is not
-installed, so this runs on any machine with horusdemodlib. Skipped when
+installed, so this runs on any machine with horusdemodlib. On Python 3.12+
+also install setuptools: upstream's owrx/feature.py still imports distutils. Skipped when
 OWRX_SRC is not set.
 """
 
@@ -179,6 +180,35 @@ class TestHorusChain(unittest.TestCase):
         self.assertAlmostEqual(msg["lon"], 138.6007, places=3)
         self.assertIn("comment", msg)
         self.assertEqual(msg["source"], msg["callsign"])
+
+    def test_service_resampler_never_below_modem_rate(self):
+        """Background decoding groups nearby dials behind a Resampler whose
+        rate is derived from each mode's get_bandwidth(). It must never fall
+        below the chain's fixed 48 kHz, or the Selector can't upsample and the
+        modem gets audio at the wrong rate (every frame fails CRC)."""
+        import subprocess
+        tree = tempfile.mkdtemp(prefix="owrx-horus-modes-")
+        try:
+            shutil.copytree(os.path.join(OWRX_SRC, "owrx"), os.path.join(tree, "owrx"))
+            subprocess.run(
+                [sys.executable, os.path.join(REPO, "docker-patch.py"), tree],
+                check=True, capture_output=True,
+            )
+            out = subprocess.run(
+                [sys.executable, "-I", "-c",
+                 "import sys; sys.path.insert(0, sys.argv[1]);"
+                 "from owrx.modes import Modes;"
+                 "print(*[m.get_bandwidth() for m in Modes.mappings"
+                 " if m.modulation.startswith('horus-')])", tree],
+                check=True, capture_output=True, text=True,
+            ).stdout.split()
+        finally:
+            shutil.rmtree(tree, ignore_errors=True)
+
+        self.assertEqual(len(out), 2, "both Horus modes registered")
+        for bw in map(float, out):
+            # Worst case: a lone dial in a group (upstream floors at 25 kHz).
+            self.assertGreaterEqual(max(bw * 1.15, 25000), 48000)
 
     def test_stop_unblocks_reader(self):
         from pycsdr.modules import Buffer

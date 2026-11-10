@@ -1,13 +1,18 @@
 # Add to owrx/modes.py
 #
 # Add these mode entries to the Modes.mappings list,
-# alongside the existing sonde/packet/ais entries:
+# alongside the existing sonde/packet/ais entries.
+#
+# ifRate=48000 keeps background-decoding resamplers at or above the modem's
+# fixed 48 kHz rate. Without it, a Horus dial grouped with nearby dials can
+# get a slower resampler and every frame fails CRC.
 
 DigitalMode(
     modulation="horus-binary",
     name="Horus Binary",
     underlying=["usb"],
     bandpass=Bandpass(100, 4000),
+    ifRate=48000,
     requirements=["horusdemodlib"],
     service=True,
     squelch=False,
@@ -18,6 +23,7 @@ DigitalMode(
     name="Horus RTTY",
     underlying=["usb"],
     bandpass=Bandpass(300, 3000),
+    ifRate=48000,
     requirements=["horusdemodlib"],
     service=True,
     secondaryFft=False,
