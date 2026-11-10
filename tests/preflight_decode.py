@@ -64,12 +64,12 @@ pcm = array.array("h", (
 ))
 
 # step 5 — feed the demod in 100 ms blocks
-demod = HorusDemodulator(mode_str="horus_binary", sample_rate=HORUS_SAMPLE_RATE)
+demod = HorusDemodulator(mode_str="horus-binary", sample_rate=HORUS_SAMPLE_RATE)
 try:
     demod.setDialFrequency(434200000)
 except Exception:
     pass
-print(f"  demod  : mode=horus_binary sample_rate={HORUS_SAMPLE_RATE}")
+print(f"  demod  : mode=horus-binary sample_rate={HORUS_SAMPLE_RATE}")
 
 decoded, crc_fail, frames = [], 0, 0
 chunk = HORUS_SAMPLE_RATE // 10

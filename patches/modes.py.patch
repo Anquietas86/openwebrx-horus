@@ -4,7 +4,7 @@
 # alongside the existing sonde/packet/ais entries:
 
 DigitalMode(
-    modulation="horus_binary",
+    modulation="horus-binary",
     name="Horus Binary",
     underlying=["usb"],
     bandpass=Bandpass(100, 4000),
@@ -13,7 +13,7 @@ DigitalMode(
     squelch=False,
 ),
 DigitalMode(
-    modulation="horus_rtty",
+    modulation="horus-rtty",
     name="Horus RTTY",
     underlying=["usb"],
     bandpass=Bandpass(300, 3000),

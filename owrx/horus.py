@@ -66,8 +66,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 HORUS_MODES = {
-    "horus_binary": Mode.BINARY,
-    "horus_rtty": Mode.RTTY_7N2,
+    "horus-binary": Mode.BINARY,
+    "horus-rtty": Mode.RTTY_7N2,
 }
 
 HORUS_SAMPLE_RATE = 48000
@@ -245,7 +245,7 @@ class HorusDemodulator:
     4FSK/RTTY modem, and emits decoded telemetry dicts via callback.
     """
 
-    def __init__(self, mode_str: str = "horus_binary", callback=None, sample_rate: int = None):
+    def __init__(self, mode_str: str = "horus-binary", callback=None, sample_rate: int = None):
         self.mode_str = mode_str
         self.callback = callback
         self._lock = threading.Lock()

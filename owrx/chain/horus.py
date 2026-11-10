@@ -42,7 +42,7 @@ class HorusDemodulatorChain:
     secondary_demod websocket messages to the client.
     """
 
-    def __init__(self, mode_str: str = "horus_binary"):
+    def __init__(self, mode_str: str = "horus-binary"):
         self.mode_str = mode_str
         self._writer = None
         self._reader = None

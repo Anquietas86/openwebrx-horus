@@ -10,7 +10,7 @@ Adds Horus decoder support to:
   - owrx/feature.py
   - owrx/modes.py
   - owrx/service/__init__.py
-  - owrx/dsp.py
+  - owrx/dsp.py  (secondary demodulator dispatch only)
 
 And RESTORES / cleans, for installs upgrading from v3.x:
   - htdocs/openwebrx.js   -> 'horus' removed from the hardcoded panel list
@@ -179,7 +179,7 @@ def patch_modes(content):
     new_modes = (
         "        {m} BEGIN\n"
         "        DigitalMode(\n"
-        '            modulation="horus_binary",\n'
+        '            modulation="horus-binary",\n'
         '            name="Horus Binary",\n'
         '            underlying=["usb"],\n'
         "            bandpass=Bandpass(100, 4000),\n"
@@ -188,7 +188,7 @@ def patch_modes(content):
         "            squelch=False,\n"
         "        ),\n"
         "        DigitalMode(\n"
-        '            modulation="horus_rtty",\n'
+        '            modulation="horus-rtty",\n'
         '            name="Horus RTTY",\n'
         '            underlying=["usb"],\n'
         "            bandpass=Bandpass(300, 3000),\n"
@@ -227,12 +227,12 @@ def patch_service(content):
     if raise_idx is not None:
         demod_lines = [
             indent + m + " BEGIN",
-            indent + 'elif mod == "horus_binary":',
+            indent + 'elif mod == "horus-binary":',
             indent + "    from owrx.chain.horus import HorusDemodulatorChain",
-            indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
-            indent + 'elif mod == "horus_rtty":',
+            indent + '    return HorusDemodulatorChain(mode_str="horus-binary")',
+            indent + 'elif mod == "horus-rtty":',
             indent + "    from owrx.chain.horus import HorusDemodulatorChain",
-            indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+            indent + '    return HorusDemodulatorChain(mode_str="horus-rtty")',
             indent + m + " END",
         ]
         for j, dl in enumerate(demod_lines):
@@ -242,16 +242,15 @@ def patch_service(content):
 
 
 def patch_dsp(content):
-    """Patch dsp.py: fix validator regex + add Horus to _getSecondaryDemodulator."""
+    """Patch dsp.py: add Horus to _getSecondaryDemodulator().
+
+    No ModulationValidator change is needed: the modes are named
+    horus-binary / horus-rtty, which the stock [a-z0-9-] regex accepts.
+    Older releases used underscores and tried to widen that regex, but the
+    replace never matched upstream's source, so the browser rejected them.
+    """
     m = MARKER
 
-    # 1. Fix ModulationValidator regex to allow underscores for horus modulations
-    old = r'"^[a-z0-9\-]+$"'
-    new = r'"^[a-z0-9_\-]+$"'
-    if old in content:
-        content = content.replace(old, new, 1)
-
-    # 2. Add Horus demodulators to _getSecondaryDemodulator()
     lines = content.split("\n")
     insert_idx = None
     indent = ""
@@ -271,12 +270,12 @@ def patch_dsp(content):
 
         demod_block = [
             indent + m + " BEGIN",
-            indent + 'elif mod == "horus_binary":',
+            indent + 'elif mod == "horus-binary":',
             indent + "    from owrx.chain.horus import HorusDemodulatorChain",
-            indent + '    return HorusDemodulatorChain(mode_str="horus_binary")',
-            indent + 'elif mod == "horus_rtty":',
+            indent + '    return HorusDemodulatorChain(mode_str="horus-binary")',
+            indent + 'elif mod == "horus-rtty":',
             indent + "    from owrx.chain.horus import HorusDemodulatorChain",
-            indent + '    return HorusDemodulatorChain(mode_str="horus_rtty")',
+            indent + '    return HorusDemodulatorChain(mode_str="horus-rtty")',
             indent + m + " END",
             "",
         ]

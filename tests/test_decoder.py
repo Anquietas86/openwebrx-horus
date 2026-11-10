@@ -23,15 +23,33 @@ class TestHorusDemodulatorInit(unittest.TestCase):
     def test_mode_mapping(self):
         from owrx.horus import HORUS_MODES
         from horusdemodlib.demod import Mode
-        self.assertEqual(HORUS_MODES["horus_binary"], Mode.BINARY)
-        self.assertEqual(HORUS_MODES["horus_rtty"], Mode.RTTY_7N2)
+        self.assertEqual(HORUS_MODES["horus-binary"], Mode.BINARY)
+        self.assertEqual(HORUS_MODES["horus-rtty"], Mode.RTTY_7N2)
 
     def test_demodulator_create_close(self):
         from owrx.horus import HorusDemodulator
-        demod = HorusDemodulator(mode_str="horus_binary")
+        demod = HorusDemodulator(mode_str="horus-binary")
         self.assertIsNotNone(demod._demod)
         demod.close()
         self.assertIsNone(demod._demod)
+
+
+class TestModeNames(unittest.TestCase):
+    """Mode names must pass OpenWebRX+'s ModulationValidator unpatched.
+
+    owrx/dsp.py validates client-supplied mode names with the regex below
+    (copied verbatim from upstream). A name that fails it is silently
+    rejected when picked in the browser, so the decoder never starts.
+    """
+
+    UPSTREAM_REGEX = r"^[a-z0-9\-]+$"
+
+    def test_mode_names_pass_upstream_validator(self):
+        import re
+        from owrx.horus import HORUS_MODES
+        pattern = re.compile(self.UPSTREAM_REGEX)
+        for name in HORUS_MODES:
+            self.assertRegex(name, pattern)
 
 
 class TestHorusDecoder(unittest.TestCase):

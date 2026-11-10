@@ -8,9 +8,9 @@
 
 # Add these conditions in _getSecondaryDemodulator(), before the raise ValueError:
 
-elif modulation == "horus_binary":
+elif mod == "horus-binary":
     from owrx.chain.horus import HorusDemodulatorChain
-    return HorusDemodulatorChain(mode_str="horus_binary")
-elif modulation == "horus_rtty":
+    return HorusDemodulatorChain(mode_str="horus-binary")
+elif mod == "horus-rtty":
     from owrx.chain.horus import HorusDemodulatorChain
-    return HorusDemodulatorChain(mode_str="horus_rtty")
+    return HorusDemodulatorChain(mode_str="horus-rtty")

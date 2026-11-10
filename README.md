@@ -38,7 +38,7 @@ sudo systemctl restart openwebrx
 The installer will:
 - Install `horusdemodlib` via pip if not already present
 - Copy all plugin files (Python modules + frontend) into your OpenWebRX installation
-- Patch the 4 OpenWebRX Python files needed to register the decoder
+- Patch the OpenWebRX Python files needed to register the decoder (`feature.py`, `modes.py`, `service/__init__.py`, `dsp.py`)
 - Back up every file it modifies (`.pre-horus` suffix)
 
 The script is idempotent — safe to run more than once. Use your actual OpenWebRX
@@ -75,7 +75,7 @@ must be restored after a rebuild:
 | Frontend plugin (JS/CSS) | `htdocs/plugins/receiver/horus/` | No — re-run installer |
 | Plugin `init.js` registration | `htdocs/plugins/receiver/init.js` | No — re-run installer |
 | Python decoder modules | `owrx/horus.py`, `owrx/chain/horus.py` | No — re-run installer |
-| Python source patches (4 files) | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
+| Python source patches | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
 | `horusdemodlib` pip package | Container site-packages | No — re-run installer |
 
 Like the systemd installer, it patches **no framework JavaScript**. On a container that
@@ -125,11 +125,20 @@ If you prefer to patch by hand, see the `patches/` directory for the exact chang
 - `owrx/feature.py` — add horusdemodlib feature detection
 - `owrx/modes.py` — add Horus mode definitions
 - `owrx/service/__init__.py` — wire up the demodulator chain and parser
-- `owrx/dsp.py` — fix ModulationValidator regex for underscore mode names
+- `owrx/dsp.py` — wire up the demodulator chain for the browser (`_getSecondaryDemodulator`)
 
 The frontend needs no source patching: copy `plugin/horus/` to
 `htdocs/plugins/receiver/horus/` and add `Plugins.load('horus');` to
 `htdocs/plugins/receiver/init.js`.
+
+### Upgrading from v4.0.2 or earlier
+
+The modes were renamed from `horus_binary` / `horus_rtty` to **`horus-binary` /
+`horus-rtty`**. OpenWebRX+ only accepts `[a-z0-9-]` in mode names, so the old
+underscore names were rejected when picked in the browser (the old installers'
+attempt to widen that check never actually applied). Both installers remove the
+old patch blocks automatically. **Re-select the Horus mode in any SDR profile,
+bookmark or background-decoding config** that used the old names.
 
 ### Post-install setup
 
@@ -178,7 +187,7 @@ v4.0.0 needs no such patch. Both the systemd and Docker installers actively *rem
 old one, restoring the pristine upstream file — and both refuse to write the file if the
 rebuilt panel list fails validation, because a malformed line here breaks the whole bundle.
 
-The 4 remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
+The remaining Python patches are unavoidable — they are how *any* OpenWebRX plugin
 registers a decoder (feature detection, mode definition, DSP chain wiring, service
 dispatch).
 
