@@ -20,7 +20,7 @@ from csdr.chain.demodulator import ServiceDemodulator, DialFrequencyReceiver
 from csdr.module import ThreadModule
 from pycsdr.types import Format
 
-from owrx.horus import HorusDemodulator, HorusParser, HORUS_SAMPLE_RATE, format_horus_telemetry
+from owrx.horus import HorusDemodulator, HorusParser, HORUS_SAMPLE_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 class HorusModule(ThreadModule):
     """Float audio in, pickled telemetry dicts out (Format.CHAR)."""
 
-    def __init__(self, mode_str: str):
+    def __init__(self, mode_str: str, service: bool = False):
         self.mode_str = mode_str
-        self.band = None
+        self.service = service
+        self.parser = HorusParser(service=service)
         self.demod = HorusDemodulator(
             mode_str=mode_str,
             callback=self._on_decode,
@@ -46,11 +47,7 @@ class HorusModule(ThreadModule):
 
     def setDialFrequency(self, frequency: int) -> None:
         self.demod.setDialFrequency(frequency)
-        try:
-            from owrx.bands import Bandplan
-            self.band = Bandplan.getSharedInstance().findBand(frequency)
-        except Exception:
-            self.band = None
+        self.parser.setDialFrequency(frequency)
 
     def run(self):
         logger.debug("Horus %s decoder started", self.mode_str)
@@ -68,22 +65,23 @@ class HorusModule(ThreadModule):
     def _on_decode(self, telemetry: dict):
         """Called (from inside process_float) for every CRC-valid frame."""
         try:
-            HorusParser.updateMap(telemetry, self.band)
+            out = self.parser.handle(telemetry)
         except Exception:
-            logger.debug("Map update failed", exc_info=True)
+            logger.exception("Failed to handle decoded Horus telemetry")
+            return
 
         writer = self.writer
-        if writer is None:
+        if writer is None or self.service:
             return
         try:
-            writer.write(pickle.dumps(format_horus_telemetry(telemetry)))
+            writer.write(pickle.dumps(out))
         except Exception:
             logger.exception("Failed to write decoded Horus telemetry")
 
 
 class HorusDemodulatorChain(ServiceDemodulator, DialFrequencyReceiver):
-    def __init__(self, mode_str: str = "horus-binary"):
-        self.module = HorusModule(mode_str)
+    def __init__(self, mode_str: str = "horus-binary", service: bool = False):
+        self.module = HorusModule(mode_str, service=service)
         super().__init__([self.module])
 
     def getFixedAudioRate(self) -> int:
@@ -104,4 +102,6 @@ class HorusDemodulatorChain(ServiceDemodulator, DialFrequencyReceiver):
         return False
 
     def isSecondaryFftShown(self) -> bool:
-        return False
+        # Shows the 4FSK/RTTY tones in the digimodes waterfall, so you can see
+        # the signal sits inside the passband before anything decodes.
+        return True

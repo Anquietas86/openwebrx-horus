@@ -1,5 +1,5 @@
 /**
- * OpenWebRX+ Horus Telemetry plugin — v5.0.0
+ * OpenWebRX+ Horus Telemetry plugin — v5.1.0
  *
  * Built on the official plugin JS API (htdocs/lib/Plugins.js, OpenWebRX+
  * 1.2.124+). No framework source is patched.
@@ -33,9 +33,9 @@
  * ── Panels that used to be force-hidden ──────────────────────────────────
  *
  * v4.0.x permanently wrapped toggle_panel to hide the ISM and digimodes
- * panels for EVERY mode, breaking other decoders. The empty digimodes box is
- * now suppressed the supported way, server-side, with secondaryFft=False on
- * the Horus mode definitions.
+ * panels for EVERY mode, breaking other decoders. The digimodes panel is
+ * now left to OpenWebRX+: the Horus modes declare secondaryFft=True, so it
+ * shows a tuning waterfall of the Horus tones.
  */
 
 (function () {
@@ -43,7 +43,7 @@
 
     var WINDOW_ID  = 'horus';
     var TITLE      = 'Horus Telemetry';
-    var VERSION    = '5.0.0';
+    var VERSION    = '5.1.0';
     var MAX_ROWS   = 200;
 
     var win = null, scrollEl = null, tbody = null, statusEl = null;

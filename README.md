@@ -1,14 +1,20 @@
 # openwebrx-horus
 
+[![CI](https://github.com/Anquietas86/openwebrx-horus/actions/workflows/ci.yml/badge.svg)](https://github.com/Anquietas86/openwebrx-horus/actions/workflows/ci.yml)
+
 OpenWebRX demodulator/decoder plugin for [Project Horus](https://github.com/projecthorus/horusdemodlib) high-altitude balloon telemetry.
 
-Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY.
+Supports Horus Binary v1, v2, and v3 (ASN.1) over 4FSK, plus legacy RTTY
+(7N2, 7N1 and 8N2 framing).
 
 ## Features
 
 - **4FSK + RTTY demodulation** via horusdemodlib's C modem (CFFI)
 - **Auto-detection** of Horus Binary v1, v2, and v3 packet formats
-- **SondeHub Amateur upload** — decoded telemetry is automatically uploaded to [SondeHub Amateur](https://amateur.sondehub.org/) using your OpenWebRX station callsign and position
+- **SondeHub Amateur upload** — decoded telemetry is uploaded to [SondeHub Amateur](https://amateur.sondehub.org/), controlled by OpenWebRX+'s own SondeHub settings (off until you enable it)
+- **Tuning waterfall** — the digimodes panel shows the Horus tones, so you can see the signal sits in the passband before anything decodes
+- **Map, metrics, MQTT** — positions go on the OpenWebRX map, decodes are counted per band (`horus.decodes.<band>`), and frames are sent to the reporting engine, so the MQTT reporter publishes them under `<topic>/Horus`
+- **Each frame handled once** — when several browsers and the background decoder all decode the same frame, it is uploaded, spotted and counted only once
 - **Stock Packet panel** — decoded frames appear in OpenWebRX+'s own Packet panel (UTC, callsign, map link, one-line telemetry summary), like APRS or radiosondes
 - **TELEM window** — an optional draggable, resizable floating window with the full table: callsign, sequence, position, altitude, SNR, and sensor data (temperature, humidity, pressure, battery, custom v3 fields)
 
@@ -25,28 +31,33 @@ are still supported by the v3.0.0 tag.
 
 ## Installation
 
+All three install methods run the same installer, `horus_patch.py`. It copies the
+plugin files, patches `owrx/feature.py`, `modes.py`, `service/__init__.py` and
+`dsp.py` between `# openwebrx-horus BEGIN/END` markers, and registers the frontend
+plugin. It:
+
+- only rewrites a file whose content actually changes, so re-running it is a no-op
+- backs every file up to `<file>.pre-horus` before the first change
+- checks every patch landed and still compiles, and **fails loudly** if one didn't
+  (e.g. an OpenWebRX+ update moved something), instead of silently doing nothing
+- patches **no framework JavaScript**; it only cleans up what v3.x installs left behind
+
 ### Bare metal / systemd
 
 ```bash
 git clone https://github.com/Anquietas86/openwebrx-horus.git
 cd openwebrx-horus
-chmod +x install.sh
 sudo ./install.sh /usr/lib/python3/dist-packages   # Debian/Ubuntu package layout
 sudo systemctl restart openwebrx
 ```
 
-The installer will:
-- Install `horusdemodlib` via pip if not already present
-- Copy all plugin files (Python modules + frontend) into your OpenWebRX installation
-- Patch the OpenWebRX Python files needed to register the decoder (`feature.py`, `modes.py`, `service/__init__.py`, `dsp.py`)
-- Back up every file it modifies (`.pre-horus` suffix)
+Use your actual OpenWebRX path: `/usr/lib/python3/dist-packages` for a Debian
+package install, or the checkout directory (default `/opt/openwebrx`) for a source
+install.
 
-The script is idempotent — safe to run more than once. Use your actual OpenWebRX
-path: `/opt/openwebrx` for a source checkout, or `/usr/lib/python3/dist-packages`
-for a Debian package install.
-
-On upgrade from v3.x the installer also **removes the old `htdocs/openwebrx.js`
-patch** and restores the pristine upstream file — see *Framework patching* below.
+`horusdemodlib` is pip-installed **system-wide** if it is missing (with
+`--break-system-packages` on Debian 12+), so the `openwebrx` service user can import
+it. If pip fails, the installer stops and shows the error.
 
 To uninstall:
 
@@ -60,47 +71,23 @@ sudo systemctl restart openwebrx
 ```bash
 git clone https://github.com/Anquietas86/openwebrx-horus.git
 cd openwebrx-horus
-chmod +x install-docker.sh
-sudo ./install-docker.sh openwebrx /opt/openwebrx/plugins
+./install-docker.sh openwebrx          # your container name
 docker restart openwebrx
 ```
 
-Replace `openwebrx` with your container name and `/opt/openwebrx/plugins` with your host plugins volume path.
+Everything is installed **inside the container**, so it is lost when the container
+is recreated (image update, `docker compose up --force-recreate`). Re-run the script
+afterwards, or use the Compose override below to reinstall on every start.
 
-The Docker installer handles these layers — all inside the container, so all of them
-must be restored after a rebuild:
+(v5.0.0 and earlier also took a host plugins path as a second argument. It was never
+used for installing and is now ignored.)
 
-| What | Where | Persists across rebuild? |
-|------|-------|--------------------------|
-| Frontend plugin (JS/CSS) | `htdocs/plugins/receiver/horus/` | No — re-run installer |
-| Plugin `init.js` registration | `htdocs/plugins/receiver/init.js` | No — re-run installer |
-| Python decoder modules | `owrx/horus.py`, `owrx/chain/horus.py` | No — re-run installer |
-| Python source patches | `owrx/feature.py`, `modes.py`, `service/__init__.py`, `dsp.py` | No — re-run installer |
-| `horusdemodlib` pip package | Container site-packages | No — re-run installer |
-
-Like the systemd installer, it patches **no framework JavaScript**. On a container that
-previously ran v3.x it additionally *restores* the frontend: `htdocs/openwebrx.js` goes
-back to upstream (stale `'horus'` panel entry removed), the old v3.x patches are stripped
-from `htdocs/plugins.js` and `htdocs/index.html`, and `htdocs/css/custom.css` is created
-if missing to stop a 404 on every page load.
-
-After a container rebuild or image update, re-run `install-docker.sh` to restore everything. For automatic re-install on every start, use the Docker Compose override below.
-
-To uninstall:
-
-```bash
-sudo ./install-docker.sh --uninstall openwebrx /opt/openwebrx/plugins
-docker restart openwebrx
-```
-
-Uninstall removes the decoder modules and **restores the framework frontend to
-upstream**. It deliberately does not just delete patch markers: for `openwebrx.js` the
-v3.x marker block wrapped the `var panels = ...` line, so deleting it orphaned the
-trailing `panels.push()` dispatch and left a bundle that threw on every load.
+To uninstall: `./install-docker.sh --uninstall openwebrx`, then restart the container.
 
 ### Docker Compose
 
-If you run OpenWebRX via docker-compose, you can have the plugin auto-install on every container start — no need to re-run the installer after image updates.
+Have the plugin install itself on every container start, so image updates need
+nothing from you:
 
 1. Clone this repo alongside your `docker-compose.yml`:
    ```bash
@@ -112,39 +99,59 @@ If you run OpenWebRX via docker-compose, you can have the plugin auto-install on
    cp openwebrx-horus/docker-compose.override.example.yml docker-compose.override.yml
    ```
 
-3. Edit `docker-compose.override.yml` to match your volume paths, then:
+3. Change the service name in `docker-compose.override.yml` to match yours, then:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
-The override mounts the repo into the container (read-only) and runs the patch script on every startup before handing off to OpenWebRX. Everything — pip install, file copies, source patches — happens automatically.
+The override mounts the repo read-only and runs `horus_patch.py install --pip` before
+handing off to OpenWebRX. If the install fails, OpenWebRX still starts (without
+Horus) and the error is in `docker compose logs`. To update the plugin:
+`git -C openwebrx-horus pull && docker compose restart`.
+
+Overrides copied from v5.0.0 or earlier still work (`docker-patch.py` forwards to
+`horus_patch.py`), but the new one is shorter and reports failures.
 
 ### Manual install
 
-If you prefer to patch by hand, see the `patches/` directory for the exact changes needed to:
-- `owrx/feature.py` — add horusdemodlib feature detection
-- `owrx/modes.py` — add Horus mode definitions
-- `owrx/service/__init__.py` — wire up the demodulator chain and parser
-- `owrx/dsp.py` — wire up the demodulator chain for the browser (`_getSecondaryDemodulator`)
+There are no hand-written patch files any more (the old `patches/` directory had
+drifted out of date). To see exactly what changes, run the installer on a scratch
+copy and diff it:
 
-The frontend needs no source patching: copy `plugin/horus/` to
-`htdocs/plugins/receiver/horus/` and add `Plugins.load('horus');` to
-`htdocs/plugins/receiver/init.js`.
+```bash
+cp -r /usr/lib/python3/dist-packages/{owrx,htdocs} /tmp/owrx-copy/
+python3 horus_patch.py install /tmp/owrx-copy
+diff -ru /usr/lib/python3/dist-packages/owrx /tmp/owrx-copy/owrx
+```
+
+### Upgrading to v5.1.0
+
+- **SondeHub uploads now follow OpenWebRX+'s SondeHub settings and are off until you
+  turn them on.** Go to **Settings > Reporting > Sondehub settings**, tick *Enable
+  Sondehub telemetry reporting* and set the *Uploader callsign* (and antenna). The
+  same switch also controls OpenWebRX+'s own radiosonde uploads. v5.0.0 and earlier
+  always uploaded, using `receiver_callsign`, falling back to `N0CALL`.
+- Your listener altitude now comes from the receiver altitude setting
+  (`receiver_asl`). It was always sent as 0 before.
+- New modes **Horus RTTY (7N1)** (`horus-rtty-7n1`) and **Horus RTTY (8N2)**
+  (`horus-rtty-8n2`). `horus-rtty` stays 7N2.
 
 ### Upgrading to v5.0.0 (from v4.0.2 or earlier)
 
 The modes were renamed from `horus_binary` / `horus_rtty` to **`horus-binary` /
 `horus-rtty`**. OpenWebRX+ only accepts `[a-z0-9-]` in mode names, so the old
 underscore names were rejected when picked in the browser (the old installers'
-attempt to widen that check never actually applied). Both installers remove the
+attempt to widen that check never actually applied). The installer removes the
 old patch blocks automatically. **Re-select the Horus mode in any SDR profile,
 bookmark or background-decoding config** that used the old names.
 
 ### Post-install setup
 
 1. Open the OpenWebRX **Features** page and confirm `horusdemodlib` shows as available
-2. Set your **receiver callsign** and **GPS position** in Settings (used for SondeHub uploads)
-3. Add a **Horus Binary** profile on your 70cm SDR source (e.g. 434.200 MHz)
+2. Set your receiver **GPS position** and **altitude** in Settings
+3. For SondeHub Amateur uploads: **Settings > Reporting > Sondehub settings**, enable
+   it and set your callsign
+4. Add a **Horus Binary** profile on your 70cm SDR source (e.g. 434.200 MHz)
 
 ## Architecture
 
@@ -152,13 +159,16 @@ bookmark or background-decoding config** that used the old names.
 RF → csdr (tuning/filtering) → USB demod + AGC → 48 kHz float audio
     → HorusModule (ThreadModule) → s16 PCM
     → HorusLib (C 4FSK modem via CFFI) → raw frames
-    → decode_packet() → telemetry dict
+    → decode_packet() → telemetry dict → HorusParser.handle()
     ├→ OpenWebRX map (server side, on the /map window)
-    ├→ Stock Packet panel + optional TELEM window (browser)
-    ├→ SondeHub Amateur (automatic upload)
+    ├→ Stock Packet panel + optional TELEM window (browser only)
+    └→ once per frame, across all chains on the receiver:
+         ├→ SondeHub Amateur (if enabled in Settings > Reporting)
+         ├→ horus.decodes.<band> metric
+         └→ ReportingEngine.spot() (e.g. MQTT, topic <topic>/Horus)
 ```
 
-### Decoder chain (v5.0.0)
+### Decoder chain
 
 `owrx/chain/horus.py` follows the same pattern as upstream's own Python-thread
 decoders (SSTV, Fax): a `ServiceDemodulator` chain that declares a fixed 48 kHz audio
@@ -168,7 +178,7 @@ writes pickled telemetry dicts. The fixed rate is what lets OpenWebRX+ hand the 
 `None` there, which crashed background decoding and forced a hand-rolled Python
 resampler on the browser path.
 
-### Frontend (v5.0.0)
+### Frontend
 
 OpenWebRX+ has no plugin API for registering a new *message panel* (the stock ones
 are hardcoded in `index.html`, `openwebrx.js` and `DemodulatorPanel.updatePanels()`).
@@ -189,10 +199,11 @@ The **TELEM window** is a second, optional view built with `Plugins.addWindow()`
 arrive exactly once. If the stock panel turns out to be enough, the window can be
 removed without touching the panel integration.
 
-The empty "digimodes" box OpenWebRX+ would otherwise show for a Horus mode is
-suppressed the supported way, with `secondaryFft=False` on the mode definitions.
-(v4.0.x hid it by wrapping `toggle_panel` globally, which also hid the ISM and
-digimodes panels for every other mode.)
+The "digimodes" panel shows the secondary FFT for Horus modes (`secondaryFft=True`
+and `isSecondaryFftShown()`): a waterfall of the passband, where the four 4FSK tones
+(or the two RTTY tones) should sit. (v4.0.x hid this panel by wrapping `toggle_panel`
+globally, which also hid the ISM and digimodes panels for every other mode; v5.0.0
+switched it off. It now shows something useful instead of an empty box.)
 
 ### Framework patching
 
@@ -217,25 +228,39 @@ dispatch).
 
 ```bash
 pip install horusdemodlib pytest setuptools
-python -m pytest tests/                      # decoder + formatting
+python -m pytest tests/                      # decoder, formatting, SondeHub settings
 
-# Also run the chain against OpenWebRX+'s real csdr/owrx Python code:
+# Also run the chain and the installer against OpenWebRX+'s real code:
 git clone --depth 1 https://github.com/luarvique/openwebrx /tmp/owrx
 OWRX_SRC=/tmp/owrx python -m pytest tests/
 ```
 
-`tests/test_chain.py` feeds a loopback-encoded Horus packet through the real chain
-classes (pycsdr's C buffers are stubbed when it isn't installed) and checks the
-contract `owrx/dsp.py` and `owrx/service` rely on.
+- `tests/test_chain.py` feeds a loopback-encoded Horus packet through the real chain
+  classes (pycsdr's C buffers are stubbed when it isn't installed) and checks the
+  contract `owrx/dsp.py` and `owrx/service` rely on.
+- `tests/test_installer.py` installs into a copy of upstream, checks every patch
+  landed and compiles, that a second run changes nothing, and that uninstall gives
+  back upstream's files byte for byte.
+
+GitHub Actions runs all of it on every push and **nightly against the latest
+OpenWebRX+ master**, so an upstream change that breaks the patches shows up as a red
+build rather than as a silent failure on launch day.
 
 ## SondeHub Amateur Integration
 
-The uploader reads your station details from OpenWebRX's config:
-- `receiver_callsign` — your amateur callsign (sent as the listener callsign)
-- `receiver_gps` — your station lat/lon/alt (sent as listener position)
-- `receiver_antenna` — your antenna description
+Uploads use OpenWebRX+'s own SondeHub settings (**Settings > Reporting > Sondehub
+settings**), the same ones its radiosonde decoders use:
 
-Telemetry is batched and uploaded every 2 seconds. No API key needed — SondeHub Amateur is a free community service. Decoded balloons will appear on the [SondeHub Amateur Tracker](https://amateur.sondehub.org/).
+- `sondehub_enabled`: uploads happen only when this is ticked
+- `sondehub_callsign`: your uploader callsign (empty or `N0CALL` means off)
+- `sondehub_antenna`: your antenna description
+- `receiver_gps` + `receiver_asl`: your listener position and altitude
+
+Changes apply immediately, with no restart. Telemetry is batched and uploaded every
+2 seconds, with the payload frequency worked out as dial frequency plus the modem's
+measured tone centre. Each frame is uploaded once, even when several browsers and the
+background decoder all decode it. No API key needed. Decoded balloons appear on the
+[SondeHub Amateur Tracker](https://amateur.sondehub.org/).
 
 ## TELEM Window
 
@@ -264,3 +289,7 @@ Open it with the `TELEM` button. A live scrolling table with columns:
 > plotted on the `/map` window (and on
 > [SondeHub Amateur](https://amateur.sondehub.org/)) with no help from the
 > frontend.
+
+## License
+
+[AGPL-3.0](LICENSE), the same as OpenWebRX+, which this plugin patches and runs inside.
