@@ -124,6 +124,19 @@ python3 horus_patch.py install /tmp/owrx-copy
 diff -ru /usr/lib/python3/dist-packages/owrx /tmp/owrx-copy/owrx
 ```
 
+### v5.1.1 (pre-flight fixes)
+
+- **Real Horus Binary v1/v2 payloads now get their callsign.** The plugin never
+  loaded horusdemodlib's payload ID list, so every payload except the test IDs
+  decoded as `UNKNOWN_PAYLOAD_ID` and SondeHub refused the upload. The list and
+  the custom field list are now downloaded at start-up (as `horus_demod` does),
+  cached in the OpenWebRX data directory for offline starts, and downloaded
+  again when an unknown ID shows up. Your server needs to reach
+  `raw.githubusercontent.com` once; after that the cached copy is used if it can't.
+- **RTTY decodes.** RTTY sentences were passed to the binary decoder and thrown
+  away; they now go through horusdemodlib's UKHAS parser.
+- The satellite count shows in the Packet panel and TELEM window.
+
 ### Upgrading to v5.1.0
 
 - **SondeHub uploads now follow OpenWebRX+'s SondeHub settings and are off until you

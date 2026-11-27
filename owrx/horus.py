@@ -11,13 +11,22 @@ enabled in the OpenWebRX settings.
 import array
 import json
 import logging
+import os
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 
 from horusdemodlib.demod import HorusLib, Mode, Frame
-from horusdemodlib.decoder import decode_packet
+from horusdemodlib.decoder import decode_packet, parse_ukhas_string
 from horusdemodlib.sondehubamateur import SondehubAmateurUploader
+import horusdemodlib.payloads as horus_payloads
+from horusdemodlib.payloads import (
+    download_latest_payload_id_list,
+    download_latest_custom_field_list,
+    read_payload_list,
+    read_custom_field_list,
+)
 
 try:
     from owrx.config import Config
@@ -90,7 +99,7 @@ HORUS_SAMPLE_RATE = 48000
 
 # Keep in step with VERSION in plugin/horus/horus.js and the release tag.
 # Sent to SondeHub Amateur as software_version.
-PLUGIN_VERSION = "5.1.0"
+PLUGIN_VERSION = "5.1.1"
 
 
 def format_horus_telemetry(data: dict) -> dict:
@@ -124,6 +133,9 @@ def format_horus_telemetry(data: dict) -> dict:
     for key in sensor_keys:
         if key in data:
             out[key] = data[key]
+    # decode_packet() calls it "satellites"; the panels read "sats".
+    if "sats" not in out and "satellites" in data:
+        out["sats"] = data["satellites"]
 
     if data.get("custom_field_names"):
         for name in data["custom_field_names"]:
@@ -183,6 +195,8 @@ def _build_comment(data: dict) -> str:
     if batt is not None:
         parts.append("{:.2f} V".format(batt))
     sats = _num(data.get("sats"))
+    if sats is None:
+        sats = _num(data.get("satellites"))
     if sats is not None:
         parts.append("{:d} sats".format(int(sats)))
 
@@ -195,6 +209,133 @@ def _build_comment(data: dict) -> str:
         parts.append("{}: {}".format(name, val))
 
     return " · ".join(parts)
+
+
+UNKNOWN_PAYLOAD_ID = "UNKNOWN_PAYLOAD_ID"
+
+
+class _PayloadLists:
+    """Keeps horusdemodlib's payload ID and custom field lists current.
+
+    Horus Binary v1/v2 frames carry a numeric payload ID, not a callsign.
+    decode_packet() looks it up in horusdemodlib.payloads.HORUS_PAYLOAD_LIST,
+    which only knows the test IDs (0, 1, 256) until someone loads the real
+    list. Without this every real v1/v2 payload decodes as
+    UNKNOWN_PAYLOAD_ID, and SondeHub refuses to upload it. The v2 custom
+    fields (ascent rate, external sensors...) need the custom field list in
+    the same way.
+
+    Same behaviour as horusdemodlib's own horus_demod uploader: download both
+    lists from GitHub at start-up, keep a copy on disk for offline starts,
+    and download again when an unknown payload ID turns up (at most every
+    30 minutes after a good download, every 2 minutes after a failed one).
+    Downloads run on a background thread so the audio thread never blocks.
+    """
+
+    REFRESH_INTERVAL = 30 * 60
+    RETRY_INTERVAL = 2 * 60
+
+    PAYLOAD_CACHE = "horus_payload_id_list.txt"
+    CUSTOM_CACHE = "horus_custom_field_list.json"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._loading = False
+        self._next_allowed = None   # None: never tried
+        self.downloaded = False
+
+    def ensure_loaded(self):
+        """Start the first load, once per process."""
+        with self._lock:
+            first = self._next_allowed is None
+        if first:
+            self.refresh()
+
+    def refresh(self, force=False) -> bool:
+        """Reload in the background unless rate-limited; True if started."""
+        with self._lock:
+            now = time.monotonic()
+            if self._loading:
+                return False
+            if not force and self._next_allowed is not None and now < self._next_allowed:
+                return False
+            self._loading = True
+            self._next_allowed = now + self.RETRY_INTERVAL
+        t = threading.Thread(target=self.load, name="horus-payload-lists", daemon=True)
+        t.start()
+        return True
+
+    @staticmethod
+    def _cache_dir():
+        d = None
+        try:
+            from owrx.config.core import CoreConfig
+            d = CoreConfig().get_data_directory()
+        except Exception:
+            d = None
+        if not d or not os.path.isdir(d) or not os.access(d, os.W_OK):
+            d = tempfile.gettempdir()
+        return d
+
+    @staticmethod
+    def _fetch(download, read, cache_path, bundled_name):
+        try:
+            result = download(filename=cache_path)
+        except Exception:
+            logger.debug("Download for %s failed", cache_path, exc_info=True)
+            result = None
+        if result:
+            return result, True
+        if os.path.isfile(cache_path):
+            try:
+                result = read(filename=cache_path)
+            except Exception:
+                result = None
+            if result:
+                return result, False
+        # The copy shipped inside the horusdemodlib package.
+        try:
+            return read(filename=bundled_name), False
+        except Exception:
+            return None, False
+
+    def load(self):
+        """Blocking load (the background thread runs this)."""
+        ok = False
+        try:
+            d = self._cache_dir()
+            payloads, ok_p = self._fetch(
+                download_latest_payload_id_list, read_payload_list,
+                os.path.join(d, self.PAYLOAD_CACHE), "payload_id_list.txt",
+            )
+            customs, ok_c = self._fetch(
+                download_latest_custom_field_list, read_custom_field_list,
+                os.path.join(d, self.CUSTOM_CACHE), "custom_field_list.json",
+            )
+            # Assigning the module attributes is what decode_packet() reads.
+            if payloads and len(payloads) >= len(horus_payloads.HORUS_PAYLOAD_LIST):
+                horus_payloads.HORUS_PAYLOAD_LIST = payloads
+            if customs and len(customs) >= len(horus_payloads.HORUS_CUSTOM_FIELDS):
+                horus_payloads.HORUS_CUSTOM_FIELDS = customs
+            ok = ok_p and ok_c
+            logger.info(
+                "Horus payload lists %s: %d payload IDs, %d custom field formats",
+                "downloaded" if ok else "loaded from local copy (download failed)",
+                len(horus_payloads.HORUS_PAYLOAD_LIST),
+                len(horus_payloads.HORUS_CUSTOM_FIELDS),
+            )
+        except Exception:
+            logger.exception("Failed to load Horus payload lists")
+        finally:
+            with self._lock:
+                self._loading = False
+                self.downloaded = self.downloaded or ok
+                self._next_allowed = time.monotonic() + (
+                    self.REFRESH_INTERVAL if ok else self.RETRY_INTERVAL
+                )
+
+
+_payload_lists = _PayloadLists()
 
 
 class _RecentFrames:
@@ -446,6 +587,9 @@ class HorusDemodulator:
 
         rate = sample_rate or HORUS_SAMPLE_RATE
         self.lib_mode = HORUS_MODES.get(mode_str, Mode.BINARY)
+        self.is_rtty = self.lib_mode != Mode.BINARY
+        if not self.is_rtty:
+            _payload_lists.ensure_loaded()
         self._demod = HorusLib(
             mode=self.lib_mode,
             sample_rate=rate,
@@ -500,7 +644,7 @@ class HorusDemodulator:
         stats = getattr(frame, "extended_stats", None)
         if stats is None:
             return None
-        tones = 4 if self.lib_mode == Mode.BINARY else 2
+        tones = 2 if self.is_rtty else 4
         try:
             est = [float(stats.f_est[i]) for i in range(tones)]
         except Exception:
@@ -518,14 +662,28 @@ class HorusDemodulator:
             return None
 
         try:
-            telemetry = decode_packet(frame.data)
+            if isinstance(frame.data, str):
+                # RTTY: HorusLib hands back the ASCII sentence ($$CALL,...*CRC),
+                # which decode_packet() (binary only) cannot take.
+                telemetry = parse_ukhas_string(frame.data)
+            else:
+                telemetry = decode_packet(frame.data)
         except Exception:
             logger.warning(
-                "Horus CRC OK but decode_packet failed (raw: %s)",
+                "Horus CRC OK but decoding failed (raw: %s)",
                 frame.data.hex() if isinstance(frame.data, bytes) else frame.data,
                 exc_info=True,
             )
             return None
+
+        if telemetry.get("callsign") == UNKNOWN_PAYLOAD_ID:
+            started = _payload_lists.refresh()
+            logger.warning(
+                "Horus frame from a payload ID that is not in the payload ID "
+                "list%s; it is not uploaded to SondeHub until it is (raw: %s)",
+                ", downloading the list again" if started else "",
+                telemetry.get("raw"),
+            )
 
         telemetry["snr"] = frame.snr
         telemetry["crc_ok"] = True
